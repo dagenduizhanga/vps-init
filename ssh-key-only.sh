@@ -151,7 +151,7 @@ apply() {
       existing_fingerprints+=$'\n'$fingerprint
     fi
   done
-  command -v restorecon >/dev/null 2>&1 && restorecon -R /root/.ssh || true
+  if command -v restorecon >/dev/null 2>&1; then restorecon -R /root/.ssh || true; fi
   [[ -n "$(list_auth)" ]] || die "root 没有任何有效公钥，不能关闭密码登录"
 
   save_original
