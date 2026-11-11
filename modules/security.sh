@@ -7,6 +7,10 @@ source "$MODULE_DIR/../lib/common.sh"
 STATE_DIR="/var/lib/vps-init/security"
 
 firewall_status() {
+  if [[ "$EUID" -ne 0 ]]; then
+    echo "查看防火墙详细状态需要 root 权限"
+    return 0
+  fi
   if command_exists ufw; then ufw status verbose
   elif command_exists firewall-cmd; then
     firewall-cmd --state 2>/dev/null || true
