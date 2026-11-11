@@ -82,7 +82,8 @@ bash vps-init.sh system tools
 - 查看 SSH 最终生效配置和监听端口
 - 查看 UFW / Firewalld 状态
 - 在确认后配置并启用已安装的防火墙
-- 启用前自动放行检测到的 SSH TCP 端口
+- 启用前自动放行检测到的 SSH TCP 端口，并优先选择 SSH 入站网卡对应的 Firewalld 区域
+- 记录本工具新增的规则，支持只撤销本工具添加的规则，不关闭原有防火墙
 
 **重要：** 防火墙启用可能影响远程访问。请保持当前 SSH 会话，确认云厂商安全组也放行 SSH 端口，并在另一个终端验证登录。工具不会自动安装防火墙，也不会擅自更改 SSH 端口。
 
@@ -91,6 +92,7 @@ bash vps-init.sh system tools
 ```bash
 bash vps-init.sh security status
 bash vps-init.sh security firewall
+bash vps-init.sh security --undo
 ```
 
 ## 项目结构
