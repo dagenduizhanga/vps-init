@@ -130,7 +130,11 @@ save_original() {
 rollback_apply() {
   local reason="$1"
   restore_config || warn "自动恢复配置失败，请保持当前 SSH 会话并使用服务商控制台修复"
-  sshd -t && reload_sshd || warn "回滚后 SSH 检查或重载失败，请保持当前连接"
+  if sshd -t; then
+    if ! reload_sshd; then warn "回滚后 SSH 服务重载失败，请保持当前连接"; fi
+  else
+    warn "回滚后 SSH 配置检查失败，请保持当前连接"
+  fi
   die "$reason；已尝试恢复原 SSH 配置"
 }
 
@@ -181,6 +185,7 @@ wizard() {
   echo "将为 root 配置公钥并关闭密码登录；确认之前不会修改 SSH 配置。"
   step 1 "检查环境"
   precheck
+  # shellcheck disable=SC1091
   ok "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
   existing="$(list_auth)"
   if [[ -n "$existing" ]]; then echo "root 当前已有公钥："; printf '%s\n' "$existing" | sed 's/^/  /'; else echo "root 当前没有公钥。"; fi
