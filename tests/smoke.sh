@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
-for script in "$ROOT_DIR/install.sh" "$ROOT_DIR/vps-init.sh" "$ROOT_DIR"/lib/*.sh "$ROOT_DIR"/modules/*.sh "$ROOT_DIR/ssh-key-only.sh; do
+for script in "$ROOT_DIR/install.sh" "$ROOT_DIR/vps-init.sh" "$ROOT_DIR"/lib/*.sh "$ROOT_DIR"/modules/*.sh "$ROOT_DIR/ssh-key-only.sh"; do
   [[ -f "$script" ]] && bash -n "$script"
 done
 
