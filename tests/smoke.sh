@@ -23,4 +23,4 @@ grep -q '防火墙状态' <<<"$security_output"
 ssh_help=$(bash "$ROOT_DIR/ssh-key-only.sh" --help)
 grep -q -- '--undo' <<<"$ssh_help"
 
-printf '%s\\n' '基础语法、入口和模块状态测试通过。'
+echo '基础语法、入口和模块状态测试通过。'
