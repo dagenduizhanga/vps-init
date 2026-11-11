@@ -1,214 +1,233 @@
 #!/usr/bin/env bash
-# SSH 密钥登录向导：给 root 装上公钥，然后关闭密码登录。可重复运行，任何检查不通过都会自动回滚。
-#
-#   bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh)
-#
-# 不带参数：交互式向导，一步步提示输入。
-# 带一个参数：不提问，直接执行（适合自动化）
-#   'ssh-ed25519 AAAA... 备注'   直接给公钥
-#   gh:<GitHub用户名>             使用 github.com/<用户名>.keys 上的全部公钥
-#   https://example.com/key.pub   从网址拉取公钥
-#   --undo                        撤销：恢复系统原有的登录方式（已装的公钥保留）
-#
-# 只写入 /etc/ssh/sshd_config.d/00-key-only.conf，不改 sshd_config 本身。需要 OpenSSH 8.2+。
-set -euo pipefail
-export PATH=$PATH:/usr/sbin:/sbin
+# SSH 密钥登录向导：为 root 安装公钥，并关闭密码登录。
+# 支持交互向导、公钥参数、GitHub 公钥导入和撤销。
+set -Eeuo pipefail
+export PATH="$PATH:/usr/sbin:/sbin"
 
-URL=https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh
-DROP=/etc/ssh/sshd_config.d/00-key-only.conf
-AUTH=/root/.ssh/authorized_keys
+URL="https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh"
+DROP="/etc/ssh/sshd_config.d/00-key-only.conf"
+AUTH="/root/.ssh/authorized_keys"
+STATE="/var/lib/vps-init/ssh"
+BACKUP="$STATE/00-key-only.conf.backup"
+MARKER="$STATE/original-existed"
 KEYS=()
+LOCK_FILE="/run/lock/vps-init-ssh.lock"
 
-if [[ -t 1 ]]; then R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' B=$'\e[1m' N=$'\e[0m'; else R='' G='' Y='' B='' N=''; fi
-err()  { echo "${R}✗ $*${N}" >&2; }
-die()  { err "$@"; exit 1; }
-ok()   { echo "${G}✓${N} $*"; }
-warn() { echo "${Y}⚠ $*${N}"; }
+if [[ -t 1 ]]; then R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; B=$'\033[1m'; N=$'\033[0m'; else R=''; G=''; Y=''; B=''; N=''; fi
+err() { echo "${R}✗ $*${N}" >&2; }
+die() { err "$@"; exit 1; }
+ok() { echo "${G}✓${N} $*"; }
+warn() { echo "${Y}⚠${N} $*" >&2; }
 step() { echo; echo "${B}[$1/4] $2${N}"; }
 
-# 交互输入一律读 /dev/tty，所以 curl ... | bash 也能用
 ask() {
-    local a l
-    printf '%s' "$1" >/dev/tty
-    IFS= read -r a </dev/tty || die "已取消"
-    while IFS= read -r -t 0.2 l </dev/tty; do a+=$'\n'$l; done # 一次粘贴多行时，把剩下的行也收进来
-    printf '%s' "$a"
+  local answer extra
+  [[ -r /dev/tty ]] || die "没有可交互终端"
+  printf '%s' "$1" >/dev/tty
+  IFS= read -r answer </dev/tty || die "已取消"
+  while IFS= read -r -t 0.2 extra </dev/tty; do answer+=$'\n'$extra; done
+  printf '%s' "$answer"
 }
-confirm() { [[ $(ask "$1 [y/N] ") == [yY]* ]]; }
-
+confirm() { [[ "$(ask "$1 [y/N] ")" =~ ^[Yy]([Ee][Ss])?$ ]]; }
 fp() { ssh-keygen -lf - <<<"$1" 2>/dev/null | awk '{print $2}'; }
-list_auth() { ssh-keygen -lf "$AUTH" 2>/dev/null || true; }
+list_auth() { [[ -f "$AUTH" ]] && ssh-keygen -lf "$AUTH" 2>/dev/null || true; }
 
 fetch() {
-    case $1 in
-        gh:*)                 curl -fsSL "https://github.com/${1#gh:}.keys" ;;
-        http://* | https://*) curl -fsSL "$1" ;;
-        *)                    printf '%s\n' "$1" ;;
-    esac
+  case "$1" in
+    gh:*)
+      local user="${1#gh:}"
+      [[ "$user" =~ ^[A-Za-z0-9-]+$ ]] || return 1
+      curl -fsSL --connect-timeout 8 --max-time 20 --max-filesize 262144 "https://github.com/$user.keys"
+      ;;
+    https://*)
+      curl -fsSL --connect-timeout 8 --max-time 20 --max-filesize 262144 "$1"
+      ;;
+    http://*) err "为避免明文传输，公钥网址必须使用 HTTPS"; return 1 ;;
+    *) printf '%s\n' "$1" ;;
+  esac
 }
 
-# 校验一段文本里的公钥：全部有效才加入 KEYS
 add_keys() {
-    local k t b
-    local -a new=()
-    [[ $1 == *"PRIVATE KEY"* ]] &&
-        { err "这是私钥！私钥只能留在你自己的设备上，这里要的是公钥（ssh-ed25519 / ssh-rsa 开头的一行）"; return 1; }
-    while IFS= read -r k; do
-        k=${k%$'\r'}
-        [[ -z ${k//[[:space:]]/} || $k == \#* ]] && continue
-        read -r t b _ <<<"$k"
-        [[ -n $(fp "$k") ]] || { err "无效公钥：$t ${b:0:16}…"; return 1; }
-        new+=("$k")
-    done <<<"$1"
-    ((${#new[@]})) || { err "没有找到公钥"; return 1; }
-    KEYS+=("${new[@]}")
-    for k in "${new[@]}"; do ok "$(ssh-keygen -lf - <<<"$k")"; done
+  local line key_type key_blob
+  local -a new=()
+  [[ "$1" == *"PRIVATE KEY"* ]] && { err "检测到私钥内容！这里只接受公钥，绝不要上传私钥。"; return 1; }
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" || "$line" == \#* ]] && continue
+    read -r key_type key_blob _ <<<"$line"
+    [[ -n "$key_type" && -n "$key_blob" && -n "$(fp "$line")" ]] || { err "发现无效公钥：$key_type ${key_blob:0:16}"; return 1; }
+    new+=("$line")
+  done <<<"$1"
+  (("${#new[@]}" > 0)) || { err "没有找到有效公钥"; return 1; }
+  KEYS+=("${new[@]}")
+  for line in "${new[@]}"; do ok "$(ssh-keygen -lf - <<<"$line")"; done
 }
 
 precheck() {
-    command -v sshd >/dev/null || die "没有找到 sshd，请先安装 openssh-server"
-    grep -Eiq '^[[:space:]]*Include[[:space:]].*sshd_config\.d' /etc/ssh/sshd_config ||
-        die "sshd_config 不支持 sshd_config.d（OpenSSH 8.2 以下的老系统），本脚本不适用"
+  command -v sshd >/dev/null 2>&1 || die "没有找到 sshd，请先安装 OpenSSH Server"
+  [[ -r /etc/ssh/sshd_config ]] || die "无法读取 /etc/ssh/sshd_config"
+  grep -Eiq '^[[:space:]]*Include[[:space:]].*sshd_config\.d' /etc/ssh/sshd_config ||
+    die "当前 SSH 主配置未启用 sshd_config.d，拒绝直接修改主配置"
+  sshd -t || die "当前 SSH 配置已经存在错误，请先修复"
 }
 
 reload_sshd() {
-    sshd -t || die "sshd 配置检查失败，未重载"
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null ||
-        service ssh reload 2>/dev/null || service sshd reload 2>/dev/null ||
-        die "重载 sshd 失败，请手动重载"
+  sshd -t || return 1
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null
+  elif command -v service >/dev/null 2>&1; then
+    service ssh reload 2>/dev/null || service sshd reload 2>/dev/null
+  else
+    err "未找到可用的服务管理命令，配置已写入但未能重载 SSH"
+    return 1
+  fi
+}
+
+restore_config() {
+  if [[ -f "$MARKER" && "$(cat "$MARKER")" == yes ]]; then
+    [[ -f "$BACKUP" ]] || { err "找不到原配置备份：$BACKUP"; return 1; }
+    install -m 600 "$BACKUP" "$DROP.restore"
+    mv -f "$DROP.restore" "$DROP"
+  else
+    rm -f "$DROP"
+  fi
 }
 
 undo() {
-    rm -f "$DROP"
-    reload_sshd
-    ok "已撤销，SSH 恢复为系统原有的登录方式"
+  [[ -f "$STATE/managed" ]] || die "没有找到本工具的 SSH 配置记录，未执行撤销"
+  restore_config || die "恢复原 SSH 配置失败"
+  sshd -t || die "恢复后的 SSH 配置检查失败，请勿关闭当前连接"
+  reload_sshd || die "配置已恢复，但 SSH 服务重载失败；请检查服务状态"
+  rm -rf "$STATE"
+  ok "已撤销本工具的 SSH 设置；已安装的公钥会保留"
+}
+
+save_original() {
+  install -d -m 700 "$STATE"
+  if [[ -f "$STATE/managed" ]]; then return 0; fi
+  if [[ -e "$DROP" ]]; then
+    # 只接管本工具旧版本生成的文件；不覆盖用户自己的同名配置。
+    grep -q '由 ssh-key-only.sh 生成' "$DROP" || die "$DROP 已存在且不是本工具生成，拒绝覆盖"
+    install -m 600 "$DROP" "$BACKUP"
+    printf 'yes\n' >"$MARKER"
+  else
+    printf 'no\n' >"$MARKER"
+  fi
+  printf 'vps-init-ssh\n' >"$STATE/managed"
+}
+
+rollback_apply() {
+  local reason="$1"
+  restore_config || warn "自动恢复配置失败，请保持当前 SSH 会话并使用服务商控制台修复"
+  sshd -t && reload_sshd || warn "回滚后 SSH 检查或重载失败，请保持当前连接"
+  die "$reason；已尝试恢复原 SSH 配置"
 }
 
 apply() {
-    local k f have prev kv eff
-
-    # 安装公钥：按指纹去重，备注不同也不会重复添加
-    install -d -m 700 /root/.ssh
-    touch "$AUTH" && chmod 600 "$AUTH"
-    have=$(list_auth | awk '{print $2}')
-    if ((${#KEYS[@]})); then
-        for k in "${KEYS[@]}"; do
-            f=$(fp "$k")
-            grep -qxF "$f" <<<"$have" && continue
-            printf '%s\n' "$k" >>"$AUTH"
-            have+=$'\n'$f
-        done
+  local key fingerprint existing_fingerprints tmp effective context
+  install -d -m 700 /root/.ssh
+  touch "$AUTH"
+  chmod 600 "$AUTH"
+  existing_fingerprints="$(list_auth | awk '{print $2}')"
+  for key in "${KEYS[@]}"; do
+    fingerprint="$(fp "$key")"
+    if ! grep -qxF "$fingerprint" <<<"$existing_fingerprints"; then
+      printf '%s\n' "$key" >>"$AUTH"
+      existing_fingerprints+=$'\n'$fingerprint
     fi
-    if command -v restorecon >/dev/null; then restorecon -R /root/.ssh; fi
-    [[ -n $(list_auth) ]] || die "root 没有任何公钥，不能关闭密码登录"
+  done
+  command -v restorecon >/dev/null 2>&1 && restorecon -R /root/.ssh || true
+  [[ -n "$(list_auth)" ]] || die "root 没有任何有效公钥，不能关闭密码登录"
 
-    # 写入配置；00- 前缀保证排在 50-cloud-init.conf 等之前（sshd 取第一次出现的值）
-    prev=$(cat "$DROP" 2>/dev/null || true)
-    rollback() {
-        if [[ -n $prev ]]; then printf '%s\n' "$prev" >"$DROP"; else rm -f "$DROP"; fi
-        die "$1，已回滚，SSH 配置未改动"
-    }
-    install -d /etc/ssh/sshd_config.d
-    cat >"$DROP" <<'EOF'
-# 由 ssh-key-only.sh 生成；删除本文件并重载 sshd 即可恢复原有登录方式
+  save_original
+  install -d -m 755 /etc/ssh/sshd_config.d
+  tmp=$(mktemp /etc/ssh/sshd_config.d/.vps-init.XXXXXX)
+  cat >"$tmp" <<'EOF'
+# 由 ssh-key-only.sh 生成；撤销请运行 --undo
 PubkeyAuthentication yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
 PermitRootLogin prohibit-password
 EOF
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$DROP"
 
-    # 校验语法和最终生效值，通过后才重载
-    eff=$(sshd -T 2>&1) || rollback "sshd 配置检查失败：$eff"
-    for kv in "pubkeyauthentication yes" "passwordauthentication no" \
-              "kbdinteractiveauthentication no" "permitrootlogin without-password"; do
-        grep -qx "$kv" <<<"$eff" ||
-            rollback "生效值不是「$kv」（可能被更早的配置覆盖）"
-    done
-    reload_sshd
-    ok "已启用密钥登录、关闭密码登录"
+  sshd -t || rollback_apply "SSH 配置语法检查失败"
+  context="user=root,host=localhost,addr=127.0.0.1"
+  effective=$(sshd -T -C "$context" 2>&1) || rollback_apply "无法读取 SSH 最终生效配置"
+  for setting in "pubkeyauthentication yes" "passwordauthentication no" "kbdinteractiveauthentication no"; do
+    grep -qx "$setting" <<<"$effective" || rollback_apply "SSH 最终配置未满足：$setting"
+  done
+  grep -Eq '^permitrootlogin (prohibit-password|without-password)$' <<<"$effective" || rollback_apply "root 密钥登录策略未生效"
+  reload_sshd || rollback_apply "SSH 服务重载失败"
+  ok "已启用密钥登录并关闭密码及键盘交互认证"
 }
 
 wizard() {
-    local existing choice src u
-    { : </dev/tty; } 2>/dev/null || die "没有可交互的终端；自动化场景请带参数运行（见脚本开头说明）"
-
-    echo "${B}SSH 密钥登录向导${N}"
-    echo "装好你的公钥后关闭密码登录，之后 root 只能用密钥登录。确认之前不会做任何改动。"
-
-    step 1 "检查环境"
-    precheck
-    # shellcheck source=/dev/null
-    ok "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")，支持 sshd_config.d"
-    existing=$(list_auth)
-    if [[ -n $existing ]]; then
-        echo "root 目前已有 $(grep -c . <<<"$existing") 把公钥："
-        list_auth | sed 's/^/    /'
-    else
-        echo "root 目前还没有公钥。"
-    fi
-
-    step 2 "添加公钥"
-    while :; do
-        echo "  1) 粘贴公钥（例如在 Termius 的 Keychain 里复制的公钥）"
-        echo "  2) 从 GitHub 账号导入（github.com/用户名.keys）"
-        [[ -n $existing && ${#KEYS[@]} -eq 0 ]] && echo "  3) 不添加，直接用上面已有的公钥"
-        choice=$(ask "请选择 [1]：")
-        case ${choice//[[:space:]]/} in
-            "" | 1) src=$(ask "粘贴公钥后回车：") ;;
-            2)
-                u=$(ask "GitHub 用户名：")
-                u=${u//[[:space:]]/}
-                [[ $u =~ ^[A-Za-z0-9-]+$ ]] || { err "用户名格式不对"; continue; }
-                src=$(fetch "gh:$u") || { err "拉取失败，请检查用户名或网络"; continue; }
-                warn "将导入 $u 账号上的全部公钥，每一把都能登录 root："
-                ;;
-            3)
-                [[ -n $existing && ${#KEYS[@]} -eq 0 ]] && break
-                err "请输入 1 或 2"; continue
-                ;;
-            *) err "请输入列表里的数字"; continue ;;
-        esac
-        add_keys "$src" || continue
-        confirm "还要再添加一把公钥吗？" || break
-    done
-
-    step 3 "确认"
-    echo "即将执行："
-    if ((${#KEYS[@]})); then echo "  • 把上面 ${#KEYS[@]} 把公钥加入 $AUTH（已存在的自动跳过）"; fi
-    echo "  • 关闭密码登录，root 只能用密钥登录"
-    echo "  • 配置只写在 $DROP，随时可以撤销"
-    confirm "确认执行？" || die "已取消，未做任何改动"
-
-    step 4 "应用"
-    apply
-
-    echo
-    warn "先别关这个窗口！现在新开一个终端，用密钥登录这台服务器试试。"
-    if confirm "新窗口用密钥登录成功了吗？（回答 n 会撤销，恢复密码登录）"; then
-        ok "全部完成。以后要撤销：bash <(curl -fsSL $URL) --undo"
-    else
-        undo
-        warn "密码登录已恢复。请确认这里粘贴的公钥和 Termius 里用的是同一把密钥，再重新运行。"
-    fi
+  local existing choice source username
+  [[ -r /dev/tty ]] || die "没有可交互终端；自动化请直接传入公钥参数"
+  echo "${B}SSH 密钥登录向导${N}"
+  echo "将为 root 配置公钥并关闭密码登录；确认之前不会修改 SSH 配置。"
+  step 1 "检查环境"
+  precheck
+  ok "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
+  existing="$(list_auth)"
+  if [[ -n "$existing" ]]; then echo "root 当前已有公钥："; printf '%s\n' "$existing" | sed 's/^/  /'; else echo "root 当前没有公钥。"; fi
+  step 2 "添加公钥"
+  while true; do
+    echo "  1) 粘贴公钥"
+    echo "  2) 从 GitHub 账号导入"
+    [[ -n "$existing" && "${#KEYS[@]}" -eq 0 ]] && echo "  3) 使用现有公钥"
+    choice="$(ask "请选择 [1]：")"
+    case "${choice//[[:space:]]/}" in
+      ""|1) source="$(ask "粘贴公钥后回车：")" ;;
+      2)
+        username="$(ask "GitHub 用户名：")"
+        username="${username//[[:space:]]/}"
+        [[ "$username" =~ ^[A-Za-z0-9-]+$ ]] || { err "用户名格式不正确"; continue; }
+        source="$(fetch "gh:$username")" || { err "获取公钥失败"; continue; }
+        warn "将导入该账号的全部公开 SSH 公钥，请确认账号归属正确。"
+        ;;
+      3) [[ -n "$existing" && "${#KEYS[@]}" -eq 0 ]] && break; err "选项无效"; continue ;;
+      *) err "选项无效"; continue ;;
+    esac
+    add_keys "$source" || continue
+    confirm "还要添加其他公钥吗？" || break
+  done
+  step 3 "确认"
+  (("${#KEYS[@]}" > 0)) && echo "将新增 ${#KEYS[@]} 把公钥（已存在的指纹会跳过）。"
+  echo "将关闭密码登录，并限制 root 只能使用密钥登录。"
+  echo "原 SSH 配置会备份到 $STATE，撤销时恢复；公钥会保留。"
+  confirm "确认执行？" || die "已取消，未修改 SSH 配置"
+  step 4 "应用"
+  apply
+  warn "请保持当前窗口打开，另开终端测试密钥登录。"
+  if confirm "新窗口已经成功登录了吗？"; then
+    ok "SSH 密钥登录配置完成"
+  else
+    undo
+    warn "已尝试恢复原登录策略；请确认公钥和客户端密钥匹配后再试。"
+  fi
 }
 
 main() {
-    [[ $EUID -eq 0 ]] || die "请用 root 运行"
-    (($# <= 1)) || die "参数太多；公钥请用引号整体括起来"
-    case ${1-} in
-        "")        wizard ;;
-        --undo)    undo ;;
-        -h | --help) echo "用法：bash <(curl -fsSL $URL) [公钥 | gh:用户名 | https://... | --undo]" ;;
-        *)
-            precheck
-            src=$(fetch "$1") || die "拉取公钥失败：$1"
-            add_keys "$src" || exit 1
-            apply
-            warn "先别关当前窗口：新开窗口用密钥登录成功后再退出。"
-            ;;
-    esac
+  [[ "$EUID" -eq 0 ]] || die "请使用 root 运行"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    flock -n 9 || die "另一个 SSH 配置任务正在运行"
+  fi
+  (("$#" <= 1)) || die "参数过多；公钥参数请整体加引号"
+  case "${1-}" in
+    "") wizard ;;
+    --undo) precheck; undo ;;
+    -h|--help) echo "用法：bash <(curl -fsSL $URL) [公钥 | gh:用户名 | https://网址 | --undo]" ;;
+    *)
+      precheck
+      source="$(fetch "$1")" || die "获取公钥失败"
+      add_keys "$source" || exit 1
+      apply
+      warn "请保持当前连接，并另开窗口测试密钥登录后再退出。"
+      ;;
+  esac
 }
-
-# 整个脚本下载、解析完才执行，下载中断时不会只跑半截
 main "$@"
