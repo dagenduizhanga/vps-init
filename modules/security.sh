@@ -100,7 +100,10 @@ enable_firewall() {
   require_root
   local port
   port=$(detect_ssh_port)
-  [[ "$port" =~ ^[0-9]+$ ]] && ((port > 0 && port <= 65535)) || die "无法确定 SSH 端口，拒绝启用防火墙"
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port <= 0 || port > 65535)); then
+    die "无法确定 SSH 端口，拒绝启用防火墙"
+    return 1
+  fi
   echo "即将检查并放行当前 SSH TCP 端口：$port"
   echo "云厂商安全组不受本工具管理，请确认云端规则也允许 SSH。"
   echo "本工具只添加 SSH 放行规则，不会修改默认入站策略或删除现有规则。"
