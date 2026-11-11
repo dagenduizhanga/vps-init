@@ -219,7 +219,7 @@ main() {
   (("$#" <= 1)) || die "参数过多；公钥参数请整体加引号"
   case "${1-}" in
     "") wizard ;;
-    --undo) precheck; undo ;;
+    --undo) command -v sshd >/dev/null 2>&1 || die "没有找到 sshd"; undo ;;
     -h|--help) echo "用法：bash <(curl -fsSL $URL) [公钥 | gh:用户名 | https://网址 | --undo]" ;;
     *)
       precheck
