@@ -31,7 +31,7 @@ detect_os() {
 detect_ssh_port() {
   local port
   if [[ -n "${SSH_CONNECTION:-}" ]]; then
-    read -r _ _ port _ <<<"$SSH_CONNECTION"
+    port=$(awk '{print $3}' <<<"$SSH_CONNECTION")
   fi
   if [[ -z "${port:-}" ]]; then
     command_exists sshd || die "未找到 sshd，无法安全确定 SSH 端口"
