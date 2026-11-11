@@ -139,7 +139,7 @@ rollback_apply() {
 }
 
 apply() {
-  local key fingerprint existing_fingerprints tmp effective context
+  local key fingerprint existing_fingerprints tmp effective context client_ip
   install -d -m 700 /root/.ssh
   touch "$AUTH"
   chmod 600 "$AUTH"
@@ -168,7 +168,9 @@ EOF
   mv -f "$tmp" "$DROP"
 
   sshd -t || rollback_apply "SSH 配置语法检查失败"
-  context="user=root,host=localhost,addr=127.0.0.1"
+  client_ip="${SSH_CONNECTION%% *}"
+  [[ -n "$client_ip" ]] || client_ip=127.0.0.1
+  context="user=root,host=$(hostname -f 2>/dev/null || hostname),addr=$client_ip"
   effective=$(sshd -T -C "$context" 2>&1) || rollback_apply "无法读取 SSH 最终生效配置"
   for setting in "pubkeyauthentication yes" "passwordauthentication no" "kbdinteractiveauthentication no"; do
     grep -qx "$setting" <<<"$effective" || rollback_apply "SSH 最终配置未满足：$setting"
