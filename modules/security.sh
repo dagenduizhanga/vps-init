@@ -68,13 +68,16 @@ enable_firewalld() {
     firewall-cmd --reload
   else
     command_exists firewall-offline-cmd || { die "Firewalld 当前未运行，且缺少 firewall-offline-cmd；为避免远程断连，拒绝直接启动"; return 1; }
+    command_exists systemctl || { die "未找到 systemctl，拒绝自动启动 Firewalld"; return 1; }
     zone=$(firewall-offline-cmd --get-default-zone)
-    firewall-offline-cmd --zone="$zone" --add-port="$port/tcp"
+    if ! firewall-offline-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
+      firewall-offline-cmd --zone="$zone" --add-port="$port/tcp"
+      added=1
+    fi
     if ! systemctl enable --now firewalld; then
-      firewall-offline-cmd --zone="$zone" --remove-port="$port/tcp" || true
+      ((added == 0)) || firewall-offline-cmd --zone="$zone" --remove-port="$port/tcp" || true
       die "Firewalld 启动失败，已尝试撤销新增规则"; return 1
     fi
-    added=1
   fi
   ((added == 0)) || save_rule_state firewalld "$port" "$zone"
   firewall-cmd --list-all
