@@ -84,6 +84,7 @@ reload_sshd() {
 }
 
 restore_config() {
+  install -d -m 755 "$(dirname "$DROP")"
   if [[ -f "$MARKER" && "$(cat "$MARKER")" == yes ]]; then
     [[ -f "$BACKUP" ]] || { err "找不到原配置备份：$BACKUP"; return 1; }
     install -m 600 "$BACKUP" "$DROP.restore"
