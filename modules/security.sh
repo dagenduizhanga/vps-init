@@ -35,14 +35,14 @@ save_rule_state() {
 
 enable_ufw() {
   local port="$1" was_active=0 added=0
-  ufw status | grep -q '^Status: active' && was_active=1 || true
+  if ufw status | grep -q '^Status: active'; then was_active=1; fi
   if ! ufw status | grep -Eq "^$port/tcp[[:space:]]+ALLOW"; then
     ufw allow "$port/tcp"
     added=1
   fi
   if ((was_active == 0)); then
     if ! ufw --force enable; then
-      ((added == 0)) || ufw --force delete allow "$port/tcp" || true
+      if ((added != 0)); then ufw --force delete allow "$port/tcp" || true; fi
       die "UFW 启用失败，已尝试撤销本次新增规则"
       return 1
     fi
@@ -88,7 +88,7 @@ enable_firewalld() {
       added=1
     fi
     if ! systemctl enable --now firewalld; then
-      ((added == 0)) || firewall-offline-cmd --zone="$zone" --remove-port="$port/tcp" || true
+      if ((added != 0)); then firewall-offline-cmd --zone="$zone" --remove-port="$port/tcp" || true; fi
       die "Firewalld 启动失败，已尝试撤销新增规则"; return 1
     fi
   fi
