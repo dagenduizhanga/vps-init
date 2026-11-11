@@ -2,7 +2,7 @@
 # 系统初始化：更新软件包、设置时区和安装常用工具。
 set -Eeuo pipefail
 MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/common.sh
+# shellcheck source=lib/common.sh
 source "$MODULE_DIR/../lib/common.sh"
 show_system_info() {
   detect_os
