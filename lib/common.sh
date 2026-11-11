@@ -4,7 +4,7 @@ VPS_INIT_VERSION="0.3.0"
 export VPS_INIT_VERSION
 if [[ -t 1 ]]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
-  C_BOLD=$'\033[1m'; C_CYAN=$'\033[36m'; C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
 else C_RED=''; C_GREEN=''; C_YELLOW=''; C_BOLD=''; C_RESET=''; fi
 export C_RED C_GREEN C_YELLOW C_BOLD C_RESET
 log_info() { printf '%s\n' "$*"; }
