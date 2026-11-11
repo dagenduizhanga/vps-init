@@ -72,15 +72,16 @@ enable_firewalld() {
   if firewall-cmd --state >/dev/null 2>&1; then active=1; fi
   if ((active == 1)); then
     zone=$(ssh_firewalld_zone)
-    if ! firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
+    if ! firewall-cmd --permanent --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
       firewall-cmd --permanent --zone="$zone" --add-port="$port/tcp"
-      firewall-cmd --zone="$zone" --add-port="$port/tcp" || {
-        firewall-cmd --permanent --zone="$zone" --remove-port="$port/tcp" || true
-        die "添加运行时 SSH 放行规则失败"; return 1;
-      }
       added=1
     fi
-    firewall-cmd --reload
+    if ! firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
+      firewall-cmd --zone="$zone" --add-port="$port/tcp" || {
+        if ((added != 0)); then firewall-cmd --permanent --zone="$zone" --remove-port="$port/tcp" || true; fi
+        die "添加运行时 SSH 放行规则失败"; return 1;
+      }
+    fi
   else
     command_exists firewall-offline-cmd || { die "Firewalld 当前未运行，且缺少 firewall-offline-cmd；为避免远程断连，拒绝直接启动"; return 1; }
     command_exists systemctl || { die "未找到 systemctl，拒绝自动启动 Firewalld"; return 1; }
@@ -95,6 +96,7 @@ enable_firewalld() {
     fi
   fi
   ((added == 0)) || save_rule_state firewalld "$port" "$zone"
+  firewall-cmd --reload
   firewall-cmd --list-all
 }
 
