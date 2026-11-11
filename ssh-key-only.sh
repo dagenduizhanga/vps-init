@@ -30,7 +30,7 @@ ask() {
 }
 confirm() { [[ "$(ask "$1 [y/N] ")" =~ ^[Yy]([Ee][Ss])?$ ]]; }
 fp() { ssh-keygen -lf - <<<"$1" 2>/dev/null | awk '{print $2}'; }
-list_auth() { [[ -f "$AUTH" ]] && ssh-keygen -lf "$AUTH" 2>/dev/null || true; }
+list_auth() { if [[ -f "$AUTH" ]]; then ssh-keygen -lf "$AUTH" 2>/dev/null || true; fi; }
 
 fetch() {
   case "$1" in
