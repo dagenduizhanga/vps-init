@@ -221,6 +221,10 @@ wizard() {
 }
 
 main() {
+  if [[ "${1-}" == "-h" || "${1-}" == "--help" ]]; then
+    echo "用法：bash <(curl -fsSL $URL) [公钥 | gh:用户名 | https://网址 | --undo]"
+    return 0
+  fi
   [[ "$EUID" -eq 0 ]] || die "请使用 root 运行"
   if command -v flock >/dev/null 2>&1; then
     install -d -m 755 "$(dirname "$LOCK_FILE")"
@@ -231,7 +235,7 @@ main() {
   case "${1-}" in
     "") wizard ;;
     --undo) command -v sshd >/dev/null 2>&1 || die "没有找到 sshd"; undo ;;
-    -h|--help) echo "用法：bash <(curl -fsSL $URL) [公钥 | gh:用户名 | https://网址 | --undo]" ;;
+
     *)
       precheck
       source="$(fetch "$1")" || die "获取公钥失败"
