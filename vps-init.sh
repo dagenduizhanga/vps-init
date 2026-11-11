@@ -15,6 +15,7 @@ vps-init - 轻量级 VPS 初始化工具
   bash vps-init.sh security        安全加固（开发中）
   bash vps-init.sh status          查看系统状态
   bash vps-init.sh --help          显示帮助
+  bash vps-init.sh --version       显示版本
 EOF
 }
 
@@ -66,6 +67,7 @@ main() {
     security) bash "$ROOT_DIR/modules/security.sh" "$@" ;;
     status) show_status ;;
     -h|--help|help) show_help ;;
+    --version) printf 'vps-init %s\n' "$VPS_INIT_VERSION" ;;
     *) log_error "未知命令：$action"; show_help; return 2 ;;
   esac
 }
