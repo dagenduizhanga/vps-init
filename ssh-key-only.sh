@@ -58,7 +58,7 @@ add_keys() {
     [[ -n "$key_type" && -n "$key_blob" && -n "$(fp "$line")" ]] || { err "发现无效公钥：$key_type ${key_blob:0:16}"; return 1; }
     new+=("$line")
   done <<<"$1"
-  (("${#new[@]}" > 0)) || { err "没有找到有效公钥"; return 1; }
+  ((${#new[@]} > 0)) || { err "没有找到有效公钥"; return 1; }
   KEYS+=("${new[@]}")
   for line in "${new[@]}"; do ok "$(ssh-keygen -lf - <<<"$line")"; done
 }
@@ -94,7 +94,17 @@ restore_config() {
 }
 
 undo() {
-  [[ -f "$STATE/managed" ]] || die "没有找到本工具的 SSH 配置记录，未执行撤销"
+  if [[ ! -f "$STATE/managed" ]]; then
+    # 兼容旧版本：旧版只写入固定 drop-in 文件，没有独立状态目录。
+    if [[ -f "$DROP" ]] && grep -q '由 ssh-key-only.sh 生成' "$DROP"; then
+      rm -f "$DROP"
+      sshd -t || die "删除旧版配置后 SSH 检查失败，请勿关闭当前连接"
+      reload_sshd || die "旧版配置已删除，但 SSH 服务重载失败"
+      ok "已撤销旧版本 SSH 配置；公钥保留"
+      return 0
+    fi
+    die "没有找到本工具的 SSH 配置记录，未执行撤销"
+  fi
   restore_config || die "恢复原 SSH 配置失败"
   sshd -t || die "恢复后的 SSH 配置检查失败，请勿关闭当前连接"
   reload_sshd || die "配置已恢复，但 SSH 服务重载失败；请检查服务状态"
@@ -195,7 +205,7 @@ wizard() {
     confirm "还要添加其他公钥吗？" || break
   done
   step 3 "确认"
-  (("${#KEYS[@]}" > 0)) && echo "将新增 ${#KEYS[@]} 把公钥（已存在的指纹会跳过）。"
+  if ((${#KEYS[@]} > 0)); then echo "将新增 ${#KEYS[@]} 把公钥（已存在的指纹会跳过）。"; fi
   echo "将关闭密码登录，并限制 root 只能使用密钥登录。"
   echo "原 SSH 配置会备份到 $STATE，撤销时恢复；公钥会保留。"
   confirm "确认执行？" || die "已取消，未修改 SSH 配置"
@@ -213,10 +223,11 @@ wizard() {
 main() {
   [[ "$EUID" -eq 0 ]] || die "请使用 root 运行"
   if command -v flock >/dev/null 2>&1; then
+    install -d -m 755 "$(dirname "$LOCK_FILE")"
     exec 9>"$LOCK_FILE"
     flock -n 9 || die "另一个 SSH 配置任务正在运行"
   fi
-  (("$#" <= 1)) || die "参数过多；公钥参数请整体加引号"
+  (($# <= 1)) || die "参数过多；公钥参数请整体加引号"
   case "${1-}" in
     "") wizard ;;
     --undo) command -v sshd >/dev/null 2>&1 || die "没有找到 sshd"; undo ;;
