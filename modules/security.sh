@@ -58,7 +58,7 @@ ssh_firewalld_zone() {
     iface=$(ip route get "$client_ip" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
     if [[ -n "$iface" ]]; then
       zone=$(firewall-cmd --get-zone-of-interface="$iface" 2>/dev/null || true)
-      [[ -n "$zone" ]] && { printf '%s\\n' "$zone"; return 0; }
+      [[ -n "$zone" ]] && { printf '%s\n' "$zone"; return 0; }
     fi
   fi
   firewall-cmd --get-default-zone
