@@ -2,7 +2,7 @@
 # 安全检查与防火墙配置。默认只检查，不自动启用防火墙。
 set -Eeuo pipefail
 MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/common.sh
+# shellcheck source=lib/common.sh
 source "$MODULE_DIR/../lib/common.sh"
 STATE_DIR="/var/lib/vps-init/security"
 
