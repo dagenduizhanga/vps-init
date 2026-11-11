@@ -87,7 +87,9 @@ restore_config() {
   install -d -m 755 "$(dirname "$DROP")"
   if [[ -f "$MARKER" && "$(cat "$MARKER")" == yes ]]; then
     [[ -f "$BACKUP" ]] || { err "找不到原配置备份：$BACKUP"; return 1; }
-    install -m 600 "$BACKUP" "$DROP.restore"
+    local original_mode=600
+    [[ -f "$STATE/original-mode" ]] && read -r original_mode <"$STATE/original-mode"
+    install -m "$original_mode" "$BACKUP" "$DROP.restore"
     mv -f "$DROP.restore" "$DROP"
   else
     rm -f "$DROP"
@@ -120,6 +122,7 @@ save_original() {
     # 只接管本工具旧版本生成的文件；不覆盖用户自己的同名配置。
     grep -q '由 ssh-key-only.sh 生成' "$DROP" || die "$DROP 已存在且不是本工具生成，拒绝覆盖"
     install -m 600 "$DROP" "$BACKUP"
+    stat -c '%a' "$DROP" >"$STATE/original-mode"
     printf 'yes\n' >"$MARKER"
   else
     printf 'no\n' >"$MARKER"
@@ -143,6 +146,7 @@ apply() {
   install -d -m 700 /root/.ssh
   touch "$AUTH"
   chmod 600 "$AUTH"
+  if [[ -s "$AUTH" ]] && [[ -n "$(tail -c 1 "$AUTH")" ]]; then printf '\n' >>"$AUTH"; fi
   existing_fingerprints="$(list_auth | awk '{print $2}')"
   for key in "${KEYS[@]}"; do
     fingerprint="$(fp "$key")"
