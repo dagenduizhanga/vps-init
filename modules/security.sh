@@ -67,7 +67,7 @@ ssh_firewalld_zone() {
 enable_firewalld() {
   local port="$1" zone active=0 added=0
   if ! command_exists firewall-cmd; then die "未安装 Firewalld"; return 1; fi
-  firewall-cmd --state >/dev/null 2>&1 && active=1 || true
+  if firewall-cmd --state >/dev/null 2>&1; then active=1; fi
   if ((active == 1)); then
     zone=$(ssh_firewalld_zone)
     if ! firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
