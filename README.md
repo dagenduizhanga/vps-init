@@ -17,6 +17,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) system
 bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) security
 bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) status
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) --version
 ```
 
 ## 交互菜单
