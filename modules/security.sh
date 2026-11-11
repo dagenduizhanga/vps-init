@@ -52,9 +52,9 @@ enable_ufw() {
 }
 
 ssh_firewalld_zone() {
-  local client_ip server_ip server_port client_port iface zone
+  local client_ip iface zone
   if [[ -n "${SSH_CONNECTION:-}" ]] && command_exists ip; then
-    read -r client_ip server_ip server_port client_port <<<"$SSH_CONNECTION"
+    client_ip="${SSH_CONNECTION%% *}"
     iface=$(ip route get "$client_ip" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
     if [[ -n "$iface" ]]; then
       zone=$(firewall-cmd --get-zone-of-interface="$iface" 2>/dev/null || true)
