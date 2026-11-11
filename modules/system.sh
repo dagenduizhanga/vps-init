@@ -42,13 +42,13 @@ set_timezone() {
 }
 install_tools() {
   require_root; detect_os
-  local packages="curl wget git vim htop unzip"
-  echo "即将安装常用工具：$packages"
+  local -a packages=(curl wget git vim htop unzip)
+  echo "即将安装常用工具：${packages[*]}"
   confirm "确认安装？" || { log_info "已取消。"; return 0; }
-  if command_exists apt-get; then export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y $packages
-  elif command_exists dnf; then dnf install -y $packages
-  elif command_exists yum; then yum install -y $packages
-  elif command_exists apk; then apk add $packages
+  if command_exists apt-get; then export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y "${packages[@]}"
+  elif command_exists dnf; then dnf install -y "${packages[@]}"
+  elif command_exists yum; then yum install -y "${packages[@]}"
+  elif command_exists apk; then apk add "${packages[@]}"
   else die "暂不支持此系统的软件包管理器"; return 1; fi
   log_ok "常用工具安装完成"
 }
