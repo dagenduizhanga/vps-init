@@ -51,12 +51,25 @@ enable_ufw() {
   ufw status verbose
 }
 
+ssh_firewalld_zone() {
+  local client_ip server_ip server_port client_port iface zone
+  if [[ -n "${SSH_CONNECTION:-}" ]] && command_exists ip; then
+    read -r client_ip server_ip server_port client_port <<<"$SSH_CONNECTION"
+    iface=$(ip route get "$client_ip" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+    if [[ -n "$iface" ]]; then
+      zone=$(firewall-cmd --get-zone-of-interface="$iface" 2>/dev/null || true)
+      [[ -n "$zone" ]] && { printf '%s\\n' "$zone"; return 0; }
+    fi
+  fi
+  firewall-cmd --get-default-zone
+}
+
 enable_firewalld() {
   local port="$1" zone active=0 added=0
   if ! command_exists firewall-cmd; then die "未安装 Firewalld"; return 1; fi
   firewall-cmd --state >/dev/null 2>&1 && active=1 || true
   if ((active == 1)); then
-    zone=$(firewall-cmd --get-default-zone)
+    zone=$(ssh_firewalld_zone)
     if ! firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
       firewall-cmd --permanent --zone="$zone" --add-port="$port/tcp"
       firewall-cmd --zone="$zone" --add-port="$port/tcp" || {
