@@ -1,49 +1,90 @@
 # vps-init
 
-新 VPS 初始化脚本。
+轻量、模块化的 VPS 初始化工具。使用 Bash 编写，界面和说明以中文为主，必要的技术术语保留英文。
 
-## ssh-key-only.sh — SSH 只允许密钥登录
+## 快速开始
 
-用 root 登录服务器，运行这一行，然后按提示操作：
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh)
+```
+
+指定功能：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) ssh
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) system
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) security
+bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) status
+```
+
+> 当前 `system` 和 `security` 是安全占位模块，明确提示尚未实现，不会修改系统。SSH 功能继续由原有向导提供。
+
+## 交互菜单
+
+不带参数启动后，可以选择 SSH 配置、系统初始化、安全加固或查看系统状态。
+
+## 当前功能
+
+### SSH 密钥登录
+
+原有 `ssh-key-only.sh` 完整保留，支持：
+
+- 粘贴一把或多把 SSH 公钥
+- 从 GitHub 用户导入公钥
+- 从 URL 获取公钥
+- 校验公钥并按指纹去重
+- 关闭密码登录并限制 root 使用密钥登录
+- 检查 sshd 配置并支持 `--undo`
+
+旧入口保持兼容：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh)
 ```
 
-向导分四步：
-
-1. **检查环境**：确认系统支持，并列出 root 已有的公钥。
-2. **添加公钥**：粘贴公钥，或从 GitHub 账号导入。每一把都会校验；如果误贴了私钥会被拦下，可以连续添加多把。
-3. **确认**：列出即将做的改动，你确认之前不会动任何东西。
-4. **应用**：完成后会让你新开一个窗口测试密钥登录。如果回答没成功，会立即撤销，恢复密码登录。
-
-### 准备公钥
-
-- **Termius**：在 Keychain 里打开你的密钥，复制公钥（`ssh-ed25519` 开头的一行）。
-- **电脑**：`cat ~/.ssh/id_ed25519.pub`。没有密钥的话，先运行 `ssh-keygen -t ed25519` 生成一把。
-
-### 不提问的用法（适合自动化）
+### 系统状态
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh) 'ssh-ed25519 AAAA... 备注'
+bash vps-init.sh status
 ```
 
-参数也可以写成 `gh:你的GitHub用户名`（导入该账号的**全部**公钥），或者一个公钥文件的网址。
+显示发行版、内核、架构、主机名和 SSH 服务状态。
 
-### 撤销
+## 项目结构
 
-恢复系统原有的登录方式，已装的公钥保留：
+```text
+vps-init/
+├── install.sh
+├── vps-init.sh
+├── lib/common.sh
+├── modules/ssh.sh
+├── modules/system.sh
+├── modules/security.sh
+├── docs/ARCHITECTURE.md
+└── ssh-key-only.sh
+```
+
+## 安全原则
+
+- 有风险的系统修改必须先展示计划并取得确认。
+- SSH 修改必须备份配置、验证配置，再重载服务。
+- 不默认开启防火墙或修改 SSH 端口，避免远程锁定。
+- 不自动删除用户已有 SSH 公钥。
+- 未实现的模块明确提示，不执行伪操作。
+
+## 开发路线
+
+- [x] 统一入口、交互菜单和模块目录
+- [x] 保留原有 SSH 功能入口
+- [ ] 将 SSH 实现迁入模块并完善事务式回滚
+- [ ] System：系统更新、时区和常用工具
+- [ ] Security：UFW / Firewalld 检测与安全加固
+- [ ] ShellCheck、Bats 和 GitHub Actions
+
+## 本地运行
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/ssh-key-only.sh) --undo
+bash vps-init.sh
+bash vps-init.sh ssh
+bash vps-init.sh status
 ```
-
-### 原理
-
-- 只写入 `/etc/ssh/sshd_config.d/00-key-only.conf`，不改 `sshd_config` 本身。文件名以 `00-` 开头，所以会排在 Ubuntu 云镜像自带的 `50-cloud-init.conf`（里面写着 `PasswordAuthentication yes`）之前生效。
-- 写入后先用 `sshd -t` 检查语法，再用 `sshd -T` 核对最终生效值，都通过才重载 sshd；否则恢复原状。重载不会断开已有连接。
-- 公钥按指纹去重，重复运行不会重复添加。
-- 整个脚本包在一个函数里，下载完整、解析完才开始执行，网络中断时不会只跑半截。
-- 需要 OpenSSH 8.2+（Debian 11+、Ubuntu 20.04+、RHEL/Rocky/Alma 9+）。更旧的系统会在第一步报错退出。
-
-> 万一登录不上：只要原来的窗口还开着，在里面运行上面的撤销命令即可。窗口已经关了的话，用服务商网页上的 VNC 控制台登录，它不走 SSH，仍然可以用密码。
