@@ -11,4 +11,4 @@ curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120
 tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir"
 source_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$source_dir" && -f "$source_dir/vps-init.sh" ]] || { echo '下载的项目结构不完整' >&2; exit 1; }
-exec bash "$source_dir/vps-init.sh" "$@"
+bash "$source_dir/vps-init.sh" "$@"
