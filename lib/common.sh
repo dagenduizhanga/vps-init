@@ -30,8 +30,13 @@ detect_os() {
 }
 detect_ssh_port() {
   local port
-  command_exists sshd || die "未找到 sshd，无法安全确定 SSH 端口"
-  port=$(sshd -T 2>/dev/null | awk '$1=="port"{print $2; exit}') || return 1
-  [[ "$port" =~ ^[0-9]+$ ]] || die "无法从 sshd 配置中读取有效端口"
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    read -r _ _ port _ <<<"$SSH_CONNECTION"
+  fi
+  if [[ -z "${port:-}" ]]; then
+    command_exists sshd || die "未找到 sshd，无法安全确定 SSH 端口"
+    port=$(sshd -T 2>/dev/null | awk '$1=="port"{print $2; exit}') || return 1
+  fi
+  [[ "$port" =~ ^[0-9]+$ ]] || die "无法从 SSH 会话或 sshd 配置中读取有效端口"
   printf '%s\n' "$port"
 }
