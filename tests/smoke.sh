@@ -11,6 +11,9 @@ grep -q '轻量级 VPS 初始化工具' <<<"$help_output"
 grep -q 'system' <<<"$help_output"
 grep -q 'security' <<<"$help_output"
 
+version_output=$(bash "$ROOT_DIR/vps-init.sh" --version)
+grep -q 'vps-init 0.3.0' <<<"$version_output"
+
 status_output=$(bash "$ROOT_DIR/vps-init.sh" status)
 grep -q 'VPS 系统状态' <<<"$status_output"
 
