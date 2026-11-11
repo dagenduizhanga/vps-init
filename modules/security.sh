@@ -17,12 +17,14 @@ firewall_status() {
 security_report() {
   detect_os
   printf '\n系统：%s\n' "$OS_NAME"
-  printf 'SSH 服务端口：%s\n' "$(detect_ssh_port)"
   if command_exists sshd; then
+    printf 'SSH 服务端口：%s\n' "$(detect_ssh_port)"
     local effective
     effective=$(sshd -T 2>/dev/null || true)
     grep -E '^(permitrootlogin|passwordauthentication|pubkeyauthentication|port) ' <<<"$effective" || true
-  else log_warn "未检测到 sshd"; fi
+  else
+    log_warn "未检测到 sshd，无法确认 SSH 端口"
+  fi
   printf '\n防火墙状态：\n'
   firewall_status
 }
