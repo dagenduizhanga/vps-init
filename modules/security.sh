@@ -39,8 +39,12 @@ security_report() {
   detect_os
   printf '\n系统：%s\n' "$OS_NAME"
   if command_exists sshd; then
-    printf 'SSH 服务端口：%s\n' "$(detect_ssh_port)"
-    local effective
+    local port effective
+    if port=$(detect_ssh_port); then
+      printf 'SSH 服务端口：%s\n' "$port"
+    else
+      log_warn "无法可靠识别 SSH 服务端口"
+    fi
     effective=$(sshd -T 2>/dev/null || true)
     grep -E '^(permitrootlogin|passwordauthentication|pubkeyauthentication|port) ' <<<"$effective" || true
   else
