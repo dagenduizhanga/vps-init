@@ -60,25 +60,32 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 ### 系统初始化
 
-支持 Debian / Ubuntu（APT）、RHEL 系（DNF / YUM）和 Alpine（APK）常见包管理器：
+选择主菜单的「系统初始化」后自动完成基础配置，不再逐项询问：
 
-- 查看系统、包管理器、时区和磁盘信息
-- 更新系统软件包
-- 设置系统时区：默认上海时间，可选新加坡、UTC 或自定义
-- 启用 NTP 自动时间同步，并查看同步状态
-- 安装 curl、wget、git、vim、htop、unzip 等常用工具
+- 默认设置为中国标准时间（`Asia/Shanghai`）
+- 自动启用系统 NTP 时间同步；没有可用同步服务时尝试安装并启用 Chrony
+- 只补齐缺少的常用工具：curl、wget、git、vim、htop、unzip
+- 重复运行会检测现有状态，已完成的项目自动跳过
 
-每项系统变更都会先展示计划并要求确认。时区设置只改变本地时间显示；NTP 才负责通过网络持续校准系统时钟，两者相互独立。
+不会自动执行整机软件升级，避免在初始化时意外更新内核或重启服务。系统升级仍通过单独命令执行，并保留确认步骤。
 
 命令示例：
 
 ```bash
+# 一键基础初始化：上海时区 + 自动校时 + 补齐常用工具
+bash vps-init.sh system
+
+# 自定义时区（可选）
+bash vps-init.sh system init Asia/Singapore
+
+# 查看系统状态
 bash vps-init.sh system status
+
+# 单独执行系统升级（需要确认）
 bash vps-init.sh system update
-bash vps-init.sh system timezone Asia/Singapore
-bash vps-init.sh system ntp
-bash vps-init.sh system tools
 ```
+
+时区只决定本地时间显示；NTP/Chrony 才负责持续校准系统时钟。启用自动同步后，首次同步可能需要等待网络时间服务器响应。
 
 ### 安全加固
 
