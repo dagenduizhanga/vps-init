@@ -6,16 +6,33 @@ MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$MODULE_DIR/../lib/common.sh"
 STATE_DIR="/var/lib/vps-init/security"
 
+firewall_backend() {
+  if command_exists ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    echo ufw
+  elif command_exists firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
+    echo firewalld
+  elif command_exists ufw; then
+    echo ufw
+  elif command_exists firewall-cmd; then
+    echo firewalld
+  else
+    echo none
+  fi
+}
+
 firewall_status() {
   if [[ "$EUID" -ne 0 ]]; then
     echo "查看防火墙详细状态需要 root 权限"
     return 0
   fi
-  if command_exists ufw; then ufw status verbose
-  elif command_exists firewall-cmd; then
-    firewall-cmd --state 2>/dev/null || true
-    firewall-cmd --list-all 2>/dev/null || true
-  else echo "未检测到 UFW 或 Firewalld"; fi
+  case "$(firewall_backend)" in
+    ufw) ufw status verbose ;;
+    firewalld)
+      firewall-cmd --state 2>/dev/null || true
+      firewall-cmd --list-all 2>/dev/null || true
+      ;;
+    *) echo "未检测到 UFW 或 Firewalld" ;;
+  esac
 }
 
 security_report() {
@@ -116,9 +133,11 @@ enable_firewall() {
   echo "云厂商安全组不受本工具管理，请确认云端规则也允许 SSH。"
   echo "本工具只添加 SSH 放行规则，不会修改默认入站策略或删除现有规则。"
   confirm "确认配置并启用防火墙？" || { log_info "已取消，防火墙未修改。"; return 0; }
-  if command_exists ufw; then enable_ufw "$port"
-  elif command_exists firewall-cmd; then enable_firewalld "$port"
-  else die "未安装 UFW 或 Firewalld；为避免误配置，本工具不会自动安装"; return 1; fi
+  case "$(firewall_backend)" in
+    ufw) enable_ufw "$port" ;;
+    firewalld) enable_firewalld "$port" ;;
+    *) die "未安装 UFW 或 Firewalld；为避免误配置，本工具不会自动安装"; return 1 ;;
+  esac
   log_ok "防火墙规则已处理。请保持当前 SSH 会话，并另开窗口验证登录。"
 }
 
@@ -159,25 +178,28 @@ auto_check() {
     return 0
   fi
 
-  if command_exists ufw; then
-    if ufw status 2>/dev/null | grep -q '^Status: active' &&
-       ufw status 2>/dev/null | grep -Eq "^$port/tcp[[:space:]]+ALLOW"; then
-      log_ok "UFW 已启用，SSH 端口 $port 已放行，无需修改"
-      return 0
-    fi
-  elif command_exists firewall-cmd; then
-    if firewall-cmd --state >/dev/null 2>&1; then
-      zone=$(ssh_firewalld_zone)
-      if firewall-cmd --permanent --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1 &&
-         firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
-        log_ok "Firewalld 已启用，SSH 端口 $port 已放行，无需修改"
+  case "$(firewall_backend)" in
+    ufw)
+      if ufw status 2>/dev/null | grep -Eq "^$port/tcp[[:space:]]+ALLOW"; then
+        log_ok "UFW 已启用，SSH 端口 $port 已放行，无需修改"
         return 0
       fi
-    fi
-  else
-    log_warn "未安装 UFW 或 Firewalld。为避免擅自改变网络策略，本工具不会自动安装或启用防火墙。"
-    return 0
-  fi
+      ;;
+    firewalld)
+      if firewall-cmd --state >/dev/null 2>&1; then
+        zone=$(ssh_firewalld_zone)
+        if firewall-cmd --permanent --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1 &&
+           firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
+          log_ok "Firewalld 已启用，SSH 端口 $port 已放行，无需修改"
+          return 0
+        fi
+      fi
+      ;;
+    none)
+      log_warn "未安装 UFW 或 Firewalld。为避免擅自改变网络策略，本工具不会自动安装或启用防火墙。"
+      return 0
+      ;;
+  esac
 
   echo
   echo "检测到防火墙尚未启用，或当前 SSH 端口 $port 尚未完整放行。"
