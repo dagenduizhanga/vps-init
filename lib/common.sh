@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # vps-init 公共函数库
-VPS_INIT_VERSION="0.3.0"
+VPS_INIT_VERSION="0.3.1"
 export VPS_INIT_VERSION
 if [[ -t 1 ]]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
