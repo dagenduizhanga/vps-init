@@ -42,7 +42,7 @@ show_menu() {
   local choice
   while true; do
     printf '\n%s\n' "${C_BOLD}       VPS INIT${C_RESET}"
-    printf '%s\n' '       VPS 初始化工具' '' '  1. SSH 密钥登录与安全配置' '  2. 系统初始化（开发中）' '  3. 安全加固（开发中）' '  4. 查看系统状态' '' '  0. 退出' ''
+    printf '%s\n' '       VPS 初始化工具' '' '  1. SSH 密钥登录与安全配置' '  2. 系统初始化' '  3. 安全加固' '  4. 查看系统状态' '' '  0. 退出' ''
     [[ -r /dev/tty ]] || die '交互菜单需要终端，请使用命令行子命令'
     printf '请选择功能：' >/dev/tty
     IFS= read -r choice </dev/tty || return 0
