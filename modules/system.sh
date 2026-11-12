@@ -88,7 +88,7 @@ start_chrony() {
       return 0
     fi
   elif command_exists rc-update && command_exists rc-service; then
-    rc-update add chronyd default
+    rc-update add chronyd default >/dev/null 2>&1 || true
     rc-service chronyd start
     return $?
   fi
