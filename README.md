@@ -64,10 +64,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 - 查看系统、包管理器、时区和磁盘信息
 - 更新系统软件包
-- 设置系统时区
+- 设置系统时区：默认上海时间，可选新加坡、UTC 或自定义
+- 启用 NTP 自动时间同步，并查看同步状态
 - 安装 curl、wget、git、vim、htop、unzip 等常用工具
 
-每项系统变更都会先展示计划并要求确认。
+每项系统变更都会先展示计划并要求确认。时区设置只改变本地时间显示；NTP 才负责通过网络持续校准系统时钟，两者相互独立。
 
 命令示例：
 
@@ -75,6 +76,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 bash vps-init.sh system status
 bash vps-init.sh system update
 bash vps-init.sh system timezone Asia/Singapore
+bash vps-init.sh system ntp
 bash vps-init.sh system tools
 ```
 
