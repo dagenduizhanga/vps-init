@@ -11,8 +11,8 @@ vps-init - 轻量级 VPS 初始化工具
 用法：
   bash vps-init.sh                 打开交互菜单
   bash vps-init.sh ssh             配置 SSH 密钥登录
-  bash vps-init.sh system          系统初始化（开发中）
-  bash vps-init.sh security        安全加固（开发中）
+  bash vps-init.sh system          一键基础初始化（上海时区、自动校时、常用工具）
+  bash vps-init.sh security        自动检查安全状态，必要时询问是否启用防火墙
   bash vps-init.sh status          查看系统状态
   bash vps-init.sh --help          显示帮助
   bash vps-init.sh --version       显示版本
