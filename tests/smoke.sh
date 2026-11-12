@@ -19,6 +19,10 @@ grep -q 'VPS 系统状态' <<<"$status_output"
 
 system_output=$(bash "$ROOT_DIR/modules/system.sh" status)
 grep -q '系统：' <<<"$system_output"
+grep -q 'NTP 自动同步' <<<"$system_output"
+
+system_help=$(bash "$ROOT_DIR/modules/system.sh" --help)
+grep -q 'ntp' <<<"$system_help"
 
 security_output=$(bash "$ROOT_DIR/modules/security.sh" status)
 grep -q '防火墙状态' <<<"$security_output"
