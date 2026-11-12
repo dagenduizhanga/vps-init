@@ -17,6 +17,25 @@ grep -q 'vps-init 0.3.1' <<<"$version_output"
 status_output=$(bash "$ROOT_DIR/vps-init.sh" status)
 grep -q 'VPS 系统状态' <<<"$status_output"
 
+source "$ROOT_DIR/lib/common.sh"
+SSH_CONNECTION='198.51.100.10 54321 192.0.2.20 2222'
+grep -q '^2222
+grep -q '系统：' <<<"$system_output"
+grep -q 'NTP 自动同步' <<<"$system_output"
+
+system_help=$(bash "$ROOT_DIR/modules/system.sh" --help)
+grep -q 'init' <<<"$system_help"
+grep -q 'Asia/Shanghai' <<<"$system_help"
+
+security_output=$(bash "$ROOT_DIR/modules/security.sh" status)
+grep -q '防火墙状态' <<<"$security_output"
+
+ssh_help=$(bash "$ROOT_DIR/ssh-key-only.sh" --help)
+grep -q -- '--undo' <<<"$ssh_help"
+
+echo '基础语法、入口和模块状态测试通过。'
+ < <(detect_ssh_port)
+
 system_output=$(bash "$ROOT_DIR/modules/system.sh" status)
 grep -q '系统：' <<<"$system_output"
 grep -q 'NTP 自动同步' <<<"$system_output"
