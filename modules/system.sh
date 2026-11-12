@@ -5,6 +5,14 @@ MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/common.sh
 source "$MODULE_DIR/../lib/common.sh"
 
+APT_INDEX_UPDATED=0
+apt_update_once() {
+  if ((APT_INDEX_UPDATED == 0)); then
+    apt-get update
+    APT_INDEX_UPDATED=1
+  fi
+}
+
 show_time_sync_status() {
   if command_exists timedatectl; then
     local ntp synced
@@ -60,7 +68,7 @@ install_chrony() {
   echo "系统没有可用的 NTP 客户端，正在安装 Chrony……"
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
+    apt_update_once
     apt-get install -y chrony
   elif command_exists dnf; then
     dnf install -y chrony
@@ -126,7 +134,7 @@ install_tools() {
     command_exists "$tool" || packages+=("$tool")
   done
 
-  if (("${#packages[@]}" == 0)); then
+  if ((${#packages[@]} == 0)); then
     log_ok "常用工具已经齐全，无需安装"
     return 0
   fi
@@ -134,7 +142,7 @@ install_tools() {
   echo "正在补齐缺少的常用工具：${packages[*]}"
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
+    apt_update_once
     apt-get install -y "${packages[@]}"
   elif command_exists dnf; then
     dnf install -y "${packages[@]}"
