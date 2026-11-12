@@ -124,9 +124,12 @@ enable_firewalld() {
 enable_firewall() {
   require_root
   local port
-  port=$(detect_ssh_port)
-  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port <= 0 || port > 65535)); then
+  if ! port=$(detect_ssh_port); then
     die "无法确定 SSH 端口，拒绝启用防火墙"
+    return 1
+  fi
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port <= 0 || port > 65535)); then
+    die "SSH 端口超出有效范围，拒绝启用防火墙"
     return 1
   fi
   echo "即将检查并放行当前 SSH TCP 端口：$port"
