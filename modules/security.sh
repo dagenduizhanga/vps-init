@@ -145,30 +145,52 @@ undo_firewall_rule() {
   log_ok "已删除本工具新增的防火墙规则；防火墙本身保持原状态"
 }
 
-show_menu() {
-  local choice
-  while true; do
-    printf '\n%s\n' "${C_BOLD}安全加固${C_RESET}"
-    printf '%s\n' '  1. 查看 SSH 与防火墙安全状态' '  2. 配置并启用防火墙（谨慎）' '  3. 撤销本工具新增的 SSH 放行规则' '' '  0. 返回'
-    printf '请选择：' >/dev/tty
-    IFS= read -r choice </dev/tty || return 0
-    case "$choice" in
-      1) security_report ;;
-      2) enable_firewall ;;
-      3) undo_firewall_rule ;;
-      0) return 0 ;;
-      *) log_warn "选项无效" ;;
-    esac
-  done
+auto_check() {
+  security_report
+
+  if [[ "$EUID" -ne 0 ]]; then
+    log_info "当前不是 root，已完成只读检查；需要 root 才能调整防火墙。"
+    return 0
+  fi
+
+  local port zone
+  if ! port=$(detect_ssh_port); then
+    log_warn "无法可靠识别 SSH 端口，本次不自动调整防火墙。"
+    return 0
+  fi
+
+  if command_exists ufw; then
+    if ufw status 2>/dev/null | grep -q '^Status: active' &&
+       ufw status 2>/dev/null | grep -Eq "^$port/tcp[[:space:]]+ALLOW"; then
+      log_ok "UFW 已启用，SSH 端口 $port 已放行，无需修改"
+      return 0
+    fi
+  elif command_exists firewall-cmd; then
+    if firewall-cmd --state >/dev/null 2>&1; then
+      zone=$(ssh_firewalld_zone)
+      if firewall-cmd --permanent --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1 &&
+         firewall-cmd --zone="$zone" --query-port="$port/tcp" >/dev/null 2>&1; then
+        log_ok "Firewalld 已启用，SSH 端口 $port 已放行，无需修改"
+        return 0
+      fi
+    fi
+  else
+    log_warn "未安装 UFW 或 Firewalld。为避免擅自改变网络策略，本工具不会自动安装或启用防火墙。"
+    return 0
+  fi
+
+  echo
+  echo "检测到防火墙尚未启用，或当前 SSH 端口 $port 尚未完整放行。"
+  enable_firewall
 }
 
 main() {
   case "${1:-menu}" in
-    menu) show_menu ;;
+    menu|check) auto_check ;;
     status) security_report ;;
     firewall) enable_firewall ;;
     --undo) undo_firewall_rule ;;
-    -h|--help) echo "用法：security.sh [status|firewall|--undo]" ;;
+    -h|--help) echo "用法：security.sh [check|status|firewall|--undo]"; echo "不带参数时自动检查安全状态，必要时才询问是否配置防火墙。" ;;
     *) die "未知安全模块命令：$1"; return 2 ;;
   esac
 }
