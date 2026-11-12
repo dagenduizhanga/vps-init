@@ -205,7 +205,7 @@ main() {
     timezone) set_timezone "${2:-Asia/Shanghai}" ;;
     -h|--help)
       echo "用法：system.sh [init [时区]|status|update|timezone [时区]]"
-      echo "不带参数默认执行基础初始化：上海时区、NTP 自动同步、补齐常用工具。"
+      echo "不带参数默认执行基础初始化：Asia/Shanghai、NTP 自动同步、补齐常用工具。"
       ;;
     *) die "未知系统模块命令：$1"; return 2 ;;
   esac
