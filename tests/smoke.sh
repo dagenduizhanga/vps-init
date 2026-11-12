@@ -12,7 +12,7 @@ grep -q 'system' <<<"$help_output"
 grep -q 'security' <<<"$help_output"
 
 version_output=$(bash "$ROOT_DIR/vps-init.sh" --version)
-grep -q 'vps-init 0.3.0' <<<"$version_output"
+grep -q 'vps-init 0.3.1' <<<"$version_output"
 
 status_output=$(bash "$ROOT_DIR/vps-init.sh" status)
 grep -q 'VPS 系统状态' <<<"$status_output"
