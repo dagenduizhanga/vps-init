@@ -315,10 +315,15 @@ check() {
       die "启用防火墙失败，已撤销本次修改"
     fi
   fi
+  # 启用后重新检查。Firewalld 刚启动时，SSH 网卡可能属于默认区域以外的区域，要按实际区域检查
+  local rule_zone=$ZONE
+  [[ $BACKEND != firewalld ]] || ZONE=$(fwd_zone)
   if ! is_active "$BACKEND" || ! allows "$PORT/tcp"; then
+    ZONE=$rule_zone
     revert "$RUN_ENABLED" ${RUN_RULES[@]+"${RUN_RULES[@]}"}
-    die "启用后检查未通过（SSH 端口没有放行），已撤销本次修改"
+    die "启用后检查未通过（SSH 端口在当前区域没有放行），已撤销本次修改"
   fi
+  ZONE=$rule_zone
 
   printf '\n'
   log_warn "先别关闭这个窗口！新开一个终端连接 SSH 试试"
