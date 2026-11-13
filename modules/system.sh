@@ -14,7 +14,7 @@ usage() {
 用法：system.sh [命令]
 
   init [时区]      一键初始化：时区（默认 $DEFAULT_TZ）、自动校时、补齐常用工具（默认命令）
-  update           升级全部软件包（需要确认）
+  update [--yes]   升级全部软件包（需要确认；--yes 用于自动化，跳过确认）
   timezone [时区]  只设置时区
   status           查看系统状态
 EOF
@@ -166,12 +166,16 @@ initialize() {
 }
 
 update_system() {
-  local pm
+  local pm yes=0
+  [[ ${1-} == -y || ${1-} == --yes ]] && yes=1
   require_root
   pm=$(pkg_manager)
   [[ $pm != none ]] || die "不支持当前系统的包管理器"
   ui_title "系统更新" "升级全部软件包。可能包含内核更新，相关服务会自动重启。"
-  confirm "开始更新？" || { log_info "已取消，系统没有任何修改"; return 0; }
+  if ((!yes)) && ! confirm "开始更新？"; then
+    log_info "已取消，系统没有任何修改"
+    return 0
+  fi
   printf '\n'
   case $pm in
     apt)
@@ -225,7 +229,7 @@ main() {
   case $cmd in
     init) initialize "$@" ;;
     */*) initialize "$cmd" ;; # system Asia/Singapore 等同于 system init Asia/Singapore
-    update) update_system ;;
+    update) update_system "$@" ;;
     timezone) require_root; set_timezone "${1:-$DEFAULT_TZ}" ;;
     status) status ;;
     summary) summary ;;
