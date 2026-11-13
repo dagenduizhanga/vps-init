@@ -34,9 +34,16 @@ tz_now() {
 echo "系统：$PRETTY_NAME"
 
 echo "时区"
+had_zoneinfo=0
+[[ -d /usr/share/zoneinfo ]] && had_zoneinfo=1
 output=$(bash "$SYSTEM" Mars/Base 2>&1) && rc=0 || rc=$?
-ok "无效时区直接报错" test "$rc" -ne 0
-ok "报错发生在开始执行之前" lacks "$output" "[1/3]"
+ok "无效时区报错" test "$rc" -ne 0
+ok "提示无效的时区" contains "$output" "无效的时区：Mars/Base"
+if ((had_zoneinfo)); then
+  ok "报错发生在开始执行之前" lacks "$output" "[1/3]"
+else
+  ok "缺少时区数据时先安装 tzdata" contains "$output" "安装时区数据 tzdata"
+fi
 
 echo "初始化"
 ok "一键初始化（Asia/Singapore）" bash "$SYSTEM" Asia/Singapore
