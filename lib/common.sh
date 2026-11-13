@@ -38,8 +38,11 @@ ui_pad() {
 ui_kv() { printf '  %s%s%s%s\n' "$C_DIM" "$(ui_pad "$1" 12)" "$C_RESET" "${2:-未知}"; }
 ui_item() { printf '  %s%s%s  %s%s%s%s\n' "$C_CYAN" "$1" "$C_RESET" "$(ui_pad "$2" 16)" "$C_DIM" "${3:-}" "$C_RESET"; }
 
-# 远程一键命令（提示用户时使用）
-cmd_hint() { printf 'bash <(curl -fsSL %s/install.sh) %s' "$VPS_INIT_RAW" "$*"; }
+# 远程一键命令（提示用户时使用）；固定了版本时，提示里也带上同一个版本
+cmd_hint() {
+  [[ ${VPS_INIT_REF:-main} == main ]] || printf 'VPS_INIT_REF=%s ' "$VPS_INIT_REF"
+  printf 'bash <(curl -fsSL %s/install.sh) %s' "$VPS_INIT_RAW" "$*"
+}
 
 # ---------- 交互 ----------
 # 交互一律读写 /dev/tty，所以 curl ... | bash 也能正常提问

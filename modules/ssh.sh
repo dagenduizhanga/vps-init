@@ -128,11 +128,27 @@ restore_original() {
   fi
 }
 
+# 回滚只撤销本次运行的改动：配置文件恢复成运行前的样子；状态目录是本次创建的才删除
 rollback() {
-  restore_original || log_warn "自动恢复失败；请保持当前连接，必要时用服务商的 VNC 控制台修复"
-  rm -rf "$STATE"
+  if [[ -n $PREV_MODE ]]; then
+    if ! { printf '%s\n' "$PREV_DROP" >"$DROP.tmp" && chmod "$PREV_MODE" "$DROP.tmp" && mv -f "$DROP.tmp" "$DROP"; }; then
+      log_warn "自动恢复失败；请保持当前连接，必要时用服务商的 VNC 控制台修复"
+    fi
+  else
+    rm -f "$DROP"
+  fi
+  ((HAD_STATE)) || rm -rf "$STATE"
   if sshd -t 2>/dev/null; then reload_sshd >/dev/null 2>&1 || true; fi
-  die "$1；SSH 配置已恢复原样，登录方式没有改变"
+  die "$1；SSH 配置已恢复到本次运行之前，登录方式没有改变"
+}
+
+# 有登录 shell、却没有配置公钥的普通用户：关闭密码登录后他们将无法通过 SSH 登录
+warn_password_users() {
+  local user home users=''
+  while IFS=: read -r user home; do
+    [[ -s $home/.ssh/authorized_keys ]] || users+="${users:+、}$user"
+  done < <(awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false|sync)$/ {print $1 ":" $6}' /etc/passwd)
+  [[ -z $users ]] || log_warn "这些用户还没有配置公钥，之后将无法用密码通过 SSH 登录：$users"
 }
 
 undo() {
@@ -169,7 +185,10 @@ apply() {
   if command_exists restorecon; then restorecon -R /root/.ssh || true; fi
   [[ -n $(list_auth) ]] || die "root 没有任何有效公钥，不能关闭密码登录"
 
-  # 2. 写入配置：先写临时文件，再原子替换
+  # 2. 写入配置：先记下运行前的状态（用于回滚），再写临时文件、原子替换
+  PREV_DROP='' PREV_MODE='' HAD_STATE=0
+  if [[ -f $DROP ]]; then PREV_DROP=$(cat "$DROP") PREV_MODE=$(stat -c '%a' "$DROP"); fi
+  if [[ -f $STATE/managed ]]; then HAD_STATE=1; fi
   save_original
   install -d -m 755 /etc/ssh/sshd_config.d
   tmp=$(mktemp /etc/ssh/sshd_config.d/.vps-init.XXXXXX)
@@ -281,9 +300,10 @@ wizard() {
 
   ui_step 3 4 "确认"
   if ((${#KEYS[@]})); then log_info "• 添加上面 ${#KEYS[@]} 把公钥（已存在的自动跳过）"; fi
-  log_info "• 关闭密码登录和键盘交互认证"
+  log_info "• 关闭所有用户的密码登录和键盘交互认证（不只是 root）"
   log_info "• root 只能用密钥登录"
   log_info "• 配置写入 $DROP，可以随时撤销"
+  warn_password_users
   confirm "确认执行？" || die "已取消，没有做任何修改"
 
   ui_step 4 4 "应用"
@@ -324,6 +344,7 @@ main() {
       precheck
       src=$(fetch "$1") || die "获取公钥失败：$1"
       add_keys "$src" || exit 1
+      warn_password_users
       apply
       log_ok "已启用密钥登录，密码登录已关闭"
       log_warn "请保持当前连接，另开窗口确认密钥能登录后再退出"

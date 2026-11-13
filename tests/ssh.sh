@@ -23,6 +23,7 @@ restore() {
   cp -a "$work/sshd_config" "$CONF"
   rm -rf "$DROP" "$EARLY" "$STATE"
   if [[ -f $work/authorized_keys ]]; then cp -a "$work/authorized_keys" "$AUTH"; else rm -f "$AUTH"; fi
+  userdel -r vpsinit-test 2>/dev/null || true
   rm -rf "$work"
 }
 trap restore EXIT
@@ -39,6 +40,7 @@ ok() { local name=$1 rc=0; shift; "$@" >"$work/out" 2>&1 || rc=$?; report $((rc 
 fails() { local name=$1 rc=0; shift; "$@" >"$work/out" 2>&1 || rc=$?; report $((rc == 0)) "$name"; }
 eff() { sshd -T | awk -v k="$1" '$1 == k {print $2}'; }
 is() { [[ $1 == "$2" ]]; }
+contains() { grep -qF -- "$2" <<<"$1"; }
 matches() { [[ $1 =~ $2 ]]; }
 nkeys() { grep -c . "$AUTH" 2>/dev/null || true; }
 clean() { rm -rf "$DROP" "$EARLY" "$STATE" "$AUTH"; cp -a "$work/sshd_config" "$CONF"; }
@@ -86,6 +88,27 @@ clean
 sed -i 's/^[[:space:]]*Include/#&/I' "$CONF"
 fails "sshd_config 没有 Include 时拒绝" bash "$SSH" "$K1"
 ok "没有改动主配置" is "$(cat "$CONF")" "$(sed 's/^[[:space:]]*Include/#&/I' "$work/sshd_config")"
+
+echo "重复运行时的回滚"
+clean
+ok "首次应用" bash "$SSH" "$K1"
+echo 'PasswordAuthentication yes' >"$EARLY"
+fails "再次运行时校验未通过" bash "$SSH" "$K1"
+ok "保留上一次运行的配置文件" grep -q '由 ssh-key-only.sh 生成' "$DROP"
+ok "保留上一次运行的状态记录" test -f "$STATE/managed"
+rm -f "$EARLY"
+ok "之后仍可正常撤销" bash "$SSH" --undo
+ok "撤销后不留配置和状态" is "$(ls "$DROP" "$STATE" 2>/dev/null)" ""
+
+echo "提醒没有公钥的普通用户"
+if command -v useradd >/dev/null; then
+  clean
+  useradd -m -s /bin/bash -u 4242 vpsinit-test
+  output=$(bash "$SSH" "$K1" 2>&1) || true
+  ok "列出之后无法用密码登录的用户" contains "$output" "vpsinit-test"
+  bash "$SSH" --undo >/dev/null
+  userdel -r vpsinit-test 2>/dev/null || true
+fi
 
 echo "不覆盖用户配置、兼容旧版本"
 clean

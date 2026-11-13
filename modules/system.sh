@@ -54,13 +54,22 @@ current_tz() {
   printf '%s' "${tz:-未知}"
 }
 
+# 检查时区名；系统还没装时区数据时只检查格式，装好后再确认
 check_tz() {
-  [[ $1 =~ ^[A-Za-z0-9_+/-]+$ && -e /usr/share/zoneinfo/$1 ]] || die "无效的时区：$1（例如 Asia/Shanghai、Asia/Singapore）"
+  if [[ ! $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] ||
+    { [[ -d /usr/share/zoneinfo ]] && [[ ! -e /usr/share/zoneinfo/$1 ]]; }; then
+    die "无效的时区：$1（例如 Asia/Shanghai、Asia/Singapore）"
+  fi
 }
 
 set_timezone() {
   local zone=$1 current
   check_tz "$zone"
+  if [[ ! -d /usr/share/zoneinfo ]]; then
+    pkg_refresh
+    run_task "安装时区数据 tzdata" pkg_install tzdata || die "安装 tzdata 失败，无法设置时区"
+    check_tz "$zone"
+  fi
   current=$(current_tz)
   if [[ $current == "$zone" ]]; then
     log_ok "时区已经是 $zone"
