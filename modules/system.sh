@@ -1,221 +1,241 @@
 #!/usr/bin/env bash
-# 系统初始化：默认上海时区、自动时间同步，并补齐常用工具。
+# 系统初始化：时区、自动校时、常用工具；系统更新单独执行并需要确认。
 set -Eeuo pipefail
 MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/common.sh
 source "$MODULE_DIR/../lib/common.sh"
 
-APT_INDEX_UPDATED=0
-apt_update_once() {
-  if ((APT_INDEX_UPDATED == 0)); then
-    apt-get update
-    APT_INDEX_UPDATED=1
-  fi
+DEFAULT_TZ=Asia/Shanghai
+TOOLS=(curl wget git vim htop unzip)
+APT_REFRESHED=0
+
+usage() {
+  cat <<EOF
+用法：system.sh [命令]
+
+  init [时区]      一键初始化：时区（默认 $DEFAULT_TZ）、自动校时、补齐常用工具（默认命令）
+  update [--yes]   升级全部软件包（需要确认；--yes 用于自动化，跳过确认）
+  timezone [时区]  只设置时区
+  status           查看系统状态
+EOF
 }
 
-show_time_sync_status() {
-  if command_exists timedatectl; then
-    local ntp synced
-    ntp=$(timedatectl show -p NTP --value 2>/dev/null || true)
-    synced=$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)
-    printf 'NTP 自动同步：%s\n' "${ntp:-未知}"
-    printf '系统时钟已同步：%s\n' "${synced:-未知}"
-  elif command_exists chronyc; then
-    echo "Chrony 时间同步状态："
-    chronyc tracking 2>/dev/null || true
-  else
-    echo "未检测到时间同步服务"
-  fi
+# ---------- 软件包 ----------
+pkg_manager() {
+  local m
+  for m in apt-get dnf yum apk; do
+    if command_exists "$m"; then echo "${m%-get}"; return; fi
+  done
+  echo none
 }
 
-show_system_info() {
-  detect_os
-  printf '\n系统：%s\n' "$OS_NAME"
-  printf '包管理器：'
-  if command_exists apt-get; then echo APT
-  elif command_exists dnf; then echo DNF
-  elif command_exists yum; then echo YUM
-  elif command_exists apk; then echo APK
-  else echo 未识别
+pkg_install() {
+  case $(pkg_manager) in
+    apt) DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@" ;;
+    dnf) dnf install -y -q "$@" ;;
+    yum) yum install -y -q "$@" ;;
+    apk) apk add -q "$@" ;;
+    *) echo "不支持的包管理器" >&2; return 1 ;;
+  esac
+}
+
+# APT 安装前刷新一次软件源；失败也继续，用本地缓存尝试安装
+pkg_refresh() {
+  [[ $(pkg_manager) == apt ]] && ((APT_REFRESHED == 0)) || return 0
+  run_task "刷新软件源" apt-get update -q || log_warn "软件源刷新失败，继续尝试安装"
+  APT_REFRESHED=1
+}
+
+# ---------- 时区与校时 ----------
+current_tz() {
+  local tz=''
+  command_exists timedatectl && tz=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+  [[ -n $tz ]] || tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's|.*/zoneinfo/||p')
+  printf '%s' "${tz:-未知}"
+}
+
+# 检查时区名；系统还没装时区数据时只检查格式，装好后再确认
+check_tz() {
+  if [[ ! $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] ||
+    { [[ -d /usr/share/zoneinfo ]] && [[ ! -e /usr/share/zoneinfo/$1 ]]; }; then
+    die "无效的时区：$1（例如 Asia/Shanghai、Asia/Singapore）"
   fi
-  printf '时区：%s\n' "$(timedatectl show -p Timezone --value 2>/dev/null || date +%Z)"
-  show_time_sync_status
-  printf '可用磁盘：\n'
-  df -h / 2>/dev/null | tail -n 1
 }
 
 set_timezone() {
-  require_root
-  local zone="${1:-Asia/Shanghai}"
-  [[ "$zone" =~ ^[A-Za-z0-9_+/-]+$ ]] || { die "时区格式不正确：$zone"; return 1; }
-  [[ -e "/usr/share/zoneinfo/$zone" ]] || { die "系统中不存在时区：$zone"; return 1; }
-
-  local current
-  current=$(timedatectl show -p Timezone --value 2>/dev/null || true)
-  if [[ "$current" == "$zone" ]]; then
-    log_ok "时区已经是 $zone，无需修改"
-  elif command_exists timedatectl; then
-    timedatectl set-timezone "$zone"
-    log_ok "时区已设置为 $zone"
-  else
+  local zone=$1 current
+  check_tz "$zone"
+  if [[ ! -d /usr/share/zoneinfo ]]; then
+    pkg_refresh
+    run_task "安装时区数据 tzdata" pkg_install tzdata || die "安装 tzdata 失败，无法设置时区"
+    check_tz "$zone"
+  fi
+  current=$(current_tz)
+  if [[ $current == "$zone" ]]; then
+    log_ok "时区已经是 $zone"
+    return 0
+  fi
+  if ! { command_exists timedatectl && timedatectl set-timezone "$zone" 2>/dev/null; }; then
     ln -snf "/usr/share/zoneinfo/$zone" /etc/localtime
-    log_ok "时区已设置为 $zone"
+    [[ ! -f /etc/timezone ]] || echo "$zone" >/etc/timezone
   fi
-}
-
-install_chrony() {
-  detect_os
-  echo "系统没有可用的 NTP 客户端，正在安装 Chrony……"
-  if command_exists apt-get; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt_update_once
-    apt-get install -y chrony
-  elif command_exists dnf; then
-    dnf install -y chrony
-  elif command_exists yum; then
-    yum install -y chrony
-  elif command_exists apk; then
-    apk add chrony
-  else
-    die "无法自动安装 Chrony：不支持当前包管理器"
-    return 1
-  fi
+  log_ok "时区已设置为 $zone（原来是 $current）"
 }
 
 start_chrony() {
   if command_exists systemctl; then
-    if systemctl enable --now chrony 2>/dev/null || systemctl enable --now chronyd 2>/dev/null; then
-      return 0
-    fi
-  elif command_exists rc-update && command_exists rc-service; then
+    systemctl enable --now chrony 2>/dev/null || systemctl enable --now chronyd 2>/dev/null
+  elif command_exists rc-service; then
     rc-update add chronyd default >/dev/null 2>&1 || true
     rc-service chronyd start
-    return $?
+  else
+    return 1
   fi
-  return 1
 }
 
 enable_time_sync() {
-  require_root
-
-  # 优先使用系统已有的 NTP 服务，不重复安装或替换。
+  # 已经装了 Chrony 就直接用它，不另装其他服务
   if command_exists chronyd; then
-    if start_chrony; then
-      log_ok "Chrony 已设置为开机启动并正在运行"
-      return 0
-    fi
-    log_warn "检测到 Chrony，但无法启动服务"
+    start_chrony && { log_ok "自动校时已开启（Chrony）"; return 0; }
+    log_warn "检测到 Chrony，但无法启动它的服务"
     return 1
   fi
-
-  # systemd 系统优先使用系统自带的 NTP 管理接口。
-  if command_exists timedatectl && timedatectl set-ntp true 2>/dev/null; then
-    local ntp
-    ntp=$(timedatectl show -p NTP --value 2>/dev/null || true)
-    if [[ "$ntp" == yes ]]; then
-      log_ok "已启用系统 NTP 自动同步"
-      return 0
-    fi
-  fi
-
-  # 没有可用的系统 NTP 服务时，自动安装并启用 Chrony。
-  install_chrony
-  command_exists chronyd || { die "Chrony 安装后仍未找到 chronyd"; return 1; }
-  start_chrony || { die "Chrony 已安装，但服务启动失败"; return 1; }
-  log_ok "Chrony 已设置为开机启动并正在运行"
-}
-
-install_tools() {
-  require_root
-  detect_os
-  local -a packages=()
-  local tool
-  for tool in curl wget git vim htop unzip; do
-    command_exists "$tool" || packages+=("$tool")
-  done
-
-  if ((${#packages[@]} == 0)); then
-    log_ok "常用工具已经齐全，无需安装"
+  # systemd 系统优先用自带的 systemd-timesyncd
+  if command_exists timedatectl && timedatectl set-ntp true 2>/dev/null &&
+    [[ $(timedatectl show -p NTP --value 2>/dev/null) == yes ]]; then
+    log_ok "自动校时已开启（systemd-timesyncd）"
     return 0
   fi
-
-  echo "正在补齐缺少的常用工具：${packages[*]}"
-  if command_exists apt-get; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt_update_once
-    apt-get install -y "${packages[@]}"
-  elif command_exists dnf; then
-    dnf install -y "${packages[@]}"
-  elif command_exists yum; then
-    yum install -y "${packages[@]}"
-  elif command_exists apk; then
-    apk add "${packages[@]}"
-  else
-    die "暂不支持此系统的软件包管理器"
-    return 1
-  fi
-  log_ok "常用工具安装完成"
+  # 都没有时安装 Chrony
+  pkg_refresh
+  run_task "安装 Chrony" pkg_install chrony || return 1
+  start_chrony || { log_warn "Chrony 已安装，但服务启动失败"; return 1; }
+  log_ok "自动校时已开启（Chrony）"
 }
 
-initialize_system() {
+time_sync_text() {
+  if command_exists timedatectl && [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) == yes ]]; then
+    ui_good 已同步
+  elif command_exists timedatectl && [[ $(timedatectl show -p NTP --value 2>/dev/null) == yes ]]; then
+    printf '已开启，等待首次同步'
+  elif command_exists chronyc && chronyc tracking >/dev/null 2>&1; then
+    ui_good 'Chrony 运行中'
+  else
+    ui_bad 未开启
+  fi
+}
+
+# ---------- 常用工具 ----------
+install_tools() {
+  local tool
+  local -a missing=() failed=()
+  for tool in "${TOOLS[@]}"; do command_exists "$tool" || missing+=("$tool"); done
+  if ((${#missing[@]} == 0)); then
+    log_ok "常用工具已经齐全：${TOOLS[*]}"
+    return 0
+  fi
+  pkg_refresh
+  # 逐个安装：某个包不可用（例如 RHEL 系的 htop 需要 EPEL）不影响其他包
+  for tool in "${missing[@]}"; do
+    run_task "安装 $tool" pkg_install "$tool" || failed+=("$tool")
+  done
+  if ((${#failed[@]})); then
+    log_warn "未能安装：${failed[*]}（RHEL 系可先运行 dnf install -y epel-release 再重试）"
+  fi
+}
+
+# ---------- 命令 ----------
+initialize() {
+  local zone=${1:-$DEFAULT_TZ}
   require_root
+  check_tz "$zone"
   detect_os
-  local zone="${1:-Asia/Shanghai}"
+  ui_title "系统初始化" "$OS_NAME · 时区 $zone · 自动校时 · 常用工具（已完成的项目自动跳过）"
 
-  echo "${C_BOLD}开始 VPS 基础初始化${C_RESET}"
-  echo "默认时区：$zone"
-  echo "自动时间同步：开启"
-  echo "常用工具：只安装当前缺少的项目"
-  echo
-
-  echo "[1/3] 设置时区"
+  ui_step 1 3 "时区"
   set_timezone "$zone"
 
-  echo
-  echo "[2/3] 启用自动时间同步"
-  enable_time_sync
+  ui_step 2 3 "自动校时"
+  enable_time_sync || log_warn "自动校时没有开启，可以稍后重新运行本功能"
 
-  echo
-  echo "[3/3] 检查常用工具"
+  ui_step 3 3 "常用工具"
   install_tools
 
-  echo
-  log_ok "基础初始化完成"
-  show_time_sync_status
+  printf '\n'
+  log_ok "初始化完成 · 时区 $(current_tz) · 校时 $(time_sync_text)"
 }
 
 update_system() {
+  local pm yes=0
+  [[ ${1-} == -y || ${1-} == --yes ]] && yes=1
   require_root
-  detect_os
-  local manager
-  if command_exists apt-get; then manager=apt
-  elif command_exists dnf; then manager=dnf
-  elif command_exists yum; then manager=yum
-  elif command_exists apk; then manager=apk
-  else die "暂不支持此系统的软件包管理器"; return 1; fi
-
-  echo "即将更新系统软件包（$manager）。此操作可能更新内核或重启服务。"
-  confirm "确认开始系统更新？" || { log_info "已取消，系统未修改。"; return 0; }
-  case "$manager" in
-    apt) export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get -y upgrade ;;
-    dnf) dnf -y upgrade ;;
-    yum) yum -y update ;;
-    apk) apk update && apk upgrade ;;
+  pm=$(pkg_manager)
+  [[ $pm != none ]] || die "不支持当前系统的包管理器"
+  ui_title "系统更新" "升级全部软件包。可能包含内核更新，相关服务会自动重启。"
+  if ((!yes)) && ! confirm "开始更新？"; then
+    log_info "已取消，系统没有任何修改"
+    return 0
+  fi
+  printf '\n'
+  case $pm in
+    apt)
+      pkg_refresh
+      # 输出写入日志，必须避免任何交互提示：保留现有配置文件、自动重启受影响的服务
+      run_task "升级软件包（可能需要几分钟）" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+        apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+      ;;
+    dnf) run_task "升级软件包（可能需要几分钟）" dnf -y -q upgrade ;;
+    yum) run_task "升级软件包（可能需要几分钟）" yum -y -q update ;;
+    apk) { run_task "刷新软件源" apk update -q && run_task "升级软件包" apk upgrade -q; } || exit 1 ;;
   esac
-  log_ok "系统软件包更新完成"
+  log_ok "系统更新完成"
+  if [[ -f /var/run/reboot-required ]] ||
+    { command_exists needs-restarting && ! needs-restarting -r >/dev/null 2>&1; }; then
+    log_warn "需要重启才能使用新内核，确认服务都正常后运行 reboot"
+  fi
 }
+
+uptime_text() {
+  local seconds
+  read -r seconds _ </proc/uptime
+  seconds=${seconds%.*}
+  printf '%d 天 %d 小时 %d 分' $((seconds / 86400)) $((seconds % 86400 / 3600)) $((seconds % 3600 / 60))
+}
+
+primary_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i + 1); exit}}'
+}
+
+status() {
+  detect_os
+  ui_title "系统"
+  ui_kv "主机名" "${HOSTNAME:-未知}"
+  ui_kv "系统" "$OS_NAME · $(uname -m)"
+  ui_kv "内核" "$(uname -r)"
+  ui_kv "IP 地址" "$(primary_ip 2>/dev/null || true)"
+  ui_kv "运行时间" "$(uptime_text)"
+  ui_kv "负载" "$(cut -d' ' -f1-3 /proc/loadavg)"
+  ui_kv "内存" "$(awk '/^MemTotal/ {t = $2} /^MemAvailable/ {a = $2} END {printf "已用 %.1fG / 共 %.1fG", (t - a) / 1048576, t / 1048576}' /proc/meminfo)"
+  ui_kv "磁盘 /" "$(df -hP / | awk 'NR == 2 {print "已用 " $3 " / 共 " $2 "（" $5 "）"}')"
+  ui_kv "时区" "$(current_tz)"
+  ui_kv "自动校时" "$(time_sync_text)"
+}
+
+summary() { printf '%s · 自动校时 %s\n' "$(current_tz)" "$(time_sync_text)"; }
 
 main() {
-  case "${1:-init}" in
-    init) initialize_system "${2:-Asia/Shanghai}" ;;
-    status) show_system_info ;;
-    update) update_system ;;
-    timezone) set_timezone "${2:-Asia/Shanghai}" ;;
-    -h|--help)
-      echo "用法：system.sh [init [时区]|status|update|timezone [时区]]"
-      echo "不带参数默认执行基础初始化：Asia/Shanghai、NTP 自动同步、补齐常用工具。"
-      ;;
-    *) die "未知系统模块命令：$1"; return 2 ;;
+  local cmd=${1:-init}
+  (($#)) && shift
+  case $cmd in
+    init) initialize "$@" ;;
+    */*) initialize "$cmd" ;; # system Asia/Singapore 等同于 system init Asia/Singapore
+    update) update_system "$@" ;;
+    timezone) require_root; set_timezone "${1:-$DEFAULT_TZ}" ;;
+    status) status ;;
+    summary) summary ;;
+    -h | --help) usage ;;
+    *) log_error "未知命令：$cmd"; usage >&2; exit 2 ;;
   esac
 }
+
 main "$@"

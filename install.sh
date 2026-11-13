@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# 下载仓库源码到临时目录并启动；不在服务器上安装常驻文件。
+# vps-init 远程启动器：下载源码到临时目录后运行，结束后自动清理，不在服务器上留下文件。
+#
+#   bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh) [命令]
+#
+# 固定到某个版本（分支、标签或提交），避免仓库更新带来意外变化：
+#   VPS_INIT_REF=<版本> bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/<版本>/install.sh)
 set -Eeuo pipefail
-REPO_TARBALL='https://github.com/dagenduizhanga/vps-init/archive/refs/heads/main.tar.gz'
-command -v curl >/dev/null 2>&1 || { echo '请先安装 curl' >&2; exit 1; }
-command -v tar >/dev/null 2>&1 || { echo '请先安装 tar' >&2; exit 1; }
+
+((BASH_VERSINFO[0] >= 4)) || { echo "需要 Bash 4 或更高版本" >&2; exit 1; }
+for cmd in curl tar; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "缺少 $cmd，请先安装" >&2; exit 1; }
+done
+
+export VPS_INIT_REF=${VPS_INIT_REF:-main}
+url="https://codeload.github.com/dagenduizhanga/vps-init/tar.gz/$VPS_INIT_REF"
 tmp_dir=$(mktemp -d)
-cleanup() { rm -rf "$tmp_dir"; }
-trap cleanup EXIT INT TERM
-curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 "$REPO_TARBALL" -o "$tmp_dir/source.tar.gz"
-tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir"
-source_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)
-[[ -n "$source_dir" && -f "$source_dir/vps-init.sh" ]] || { echo '下载的项目结构不完整' >&2; exit 1; }
-bash "$source_dir/vps-init.sh" "$@"
+trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+
+curl --proto '=https' --tlsv1.2 -fsSL --retry 2 --connect-timeout 10 --max-time 120 "$url" |
+  tar -xz -C "$tmp_dir" --strip-components 1 ||
+  { echo "下载 vps-init（$VPS_INIT_REF）失败，请检查网络" >&2; exit 1; }
+[[ -f $tmp_dir/vps-init.sh ]] || { echo "下载的文件不完整" >&2; exit 1; }
+
+bash "$tmp_dir/vps-init.sh" "$@"

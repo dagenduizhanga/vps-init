@@ -1,24 +1,91 @@
-name: Shell checks
+name: 测试
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
-  group: shell-checks-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  shellcheck:
+  lint:
+    name: ShellCheck 与冒烟测试
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-      - name: 安装 ShellCheck
-        run: sudo apt-get install -y shellcheck
+      - uses: actions/checkout@v4
       - name: ShellCheck
-        run: shellcheck -x install.sh vps-init.sh lib/*.sh modules/*.sh ssh-key-only.sh tests/*.sh
-      - name: Bash 语法与冒烟测试
+        run: |
+          command -v shellcheck >/dev/null || sudo apt-get install -y -q shellcheck
+          shellcheck -x install.sh vps-init.sh ssh-key-only.sh lib/*.sh modules/*.sh tests/*.sh
+      - name: 冒烟测试（非 root）
         run: bash tests/smoke.sh
+
+  host:
+    name: 真实 systemd 主机
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装依赖
+        run: sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server python3-pexpect
+      - name: SSH 模块（真实 sshd 重载）
+        run: sudo bash tests/ssh.sh
+      - name: 系统初始化（真实 timedatectl）
+        run: sudo SKIP_UPDATE=1 bash tests/system.sh
+      - name: SSH 向导、主菜单、防火墙交互
+        run: sudo python3 tests/interactive.py
+
+  firewall:
+    name: 防火墙 · 真实 ${{ matrix.backend }}
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ufw, firewalld]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 ${{ matrix.backend }}
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server python3-pexpect
+          if [ "${{ matrix.backend }}" = firewalld ]; then
+            sudo apt-get remove -y -q ufw || true
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q firewalld
+            sudo systemctl disable --now firewalld
+          else
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q ufw
+          fi
+      - name: 启用、复查、撤销、测试失败回滚
+        run: sudo python3 tests/firewall_real.py
+
+  distros:
+    name: ${{ matrix.image }}
+    needs: lint
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:11, debian:12, ubuntu:20.04, ubuntu:22.04, ubuntu:24.04, almalinux:9]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 OpenSSH
+        run: |
+          if command -v apt-get >/dev/null; then
+            # Debian 11 长期支持已结束，安全源的软件包已下架，改从主仓库安装
+            if grep -q bullseye /etc/os-release; then sed -i '/security/d' /etc/apt/sources.list; fi
+            apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server
+          else
+            dnf install -y -q openssh-server openssh-clients util-linux && ssh-keygen -A
+          fi
+      - name: SSH 模块
+        run: bash tests/ssh.sh
+      - name: 系统初始化与系统更新
+        run: bash tests/system.sh

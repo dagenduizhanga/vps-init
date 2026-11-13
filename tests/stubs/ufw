@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# 测试替身：模拟 UFW，状态保存在 $UFW_STUB_DIR；只实现 vps-init 用到的命令
+set -euo pipefail
+dir=${UFW_STUB_DIR:?}
+mkdir -p "$dir"
+touch "$dir/rules"
+[[ ${1-} == --force ]] && shift
+case "$*" in
+  status | "status verbose")
+    if [[ -f $dir/active ]]; then
+      printf 'Status: active\n\n%-26s %-11s %s\n%-26s %-11s %s\n' To Action From -- ------ ----
+      while read -r action rule; do printf '%-26s %-11s %s\n' "$rule" "${action^^}" Anywhere; done <"$dir/rules"
+    else
+      echo 'Status: inactive'
+    fi
+    ;;
+  "show added")
+    echo "Added user rules (see 'ufw status' for running firewall):"
+    if [[ -s $dir/rules ]]; then sed 's/^/ufw /' "$dir/rules"; else echo '(None)'; fi
+    ;;
+  "allow "* | "limit "*)
+    if grep -qxF "$*" "$dir/rules"; then echo 'Skipping adding existing rule'; else echo "$*" >>"$dir/rules"; echo 'Rule added'; fi
+    ;;
+  "delete allow "*)
+    rule="$*"
+    grep -vxF "${rule#delete }" "$dir/rules" >"$dir/rules.new" || true
+    mv "$dir/rules.new" "$dir/rules"
+    echo 'Rule deleted'
+    ;;
+  enable) touch "$dir/active"; echo 'Firewall is active and enabled on system startup' ;;
+  disable) rm -f "$dir/active"; echo 'Firewall stopped and disabled on system startup' ;;
+  *) echo "ufw 替身不支持：$*" >&2; exit 1 ;;
+esac

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# 测试替身：容器里没有 systemd，服务操作一律视为成功
+echo "[systemctl 替身] $*"
