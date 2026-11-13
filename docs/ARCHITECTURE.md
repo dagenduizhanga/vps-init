@@ -12,7 +12,7 @@
 | `vps-init.sh` | 命令入口、交互菜单、状态面板 |
 | `lib/common.sh` | 版本号、界面输出（颜色、对齐、步骤）、交互（`ask` / `confirm`）、`run_task`、系统检测 |
 | `modules/*.sh` | 各功能模块，可单独运行；统一提供 `status`（详细状态）、`summary`（菜单面板的一行摘要）、`--help` |
-| `tests/` | `smoke.sh`（无需 root）、`ssh.sh`（真实 sshd）、`interactive.py`（pexpect 交互）、`stubs/`（测试替身） |
+| `tests/` | `smoke.sh`（无需 root）、`ssh.sh`（真实 sshd）、`system.sh`（真实包管理器）、`interactive.py`（pexpect 交互）、`firewall_real.py`（真实 UFW / Firewalld）、`stubs/`（测试替身） |
 | `ssh-key-only.sh` | 旧版入口，转发到 `ssh` 模块 |
 
 ## 模块约定
@@ -31,7 +31,8 @@
 
 - 每个修改系统的分支（应用、撤销、回滚、拒绝）都应有行为测试，而不只是检查帮助文字。
 - `tests/ssh.sh` 在 CI 中于 Debian 11/12、Ubuntu 20.04/22.04/24.04、AlmaLinux 9 容器内运行，覆盖 OpenSSH 8.2 到 9.9；在 GitHub 的 Ubuntu 主机上再以真实 systemd 运行一次（目前为 OpenSSH 10.2）。
-- 防火墙测试使用 `tests/stubs/ufw` 和 `tests/stubs/ss` 替身，不触碰真实网络。
+- `tests/system.sh` 在同样的容器里实际执行初始化和系统更新，覆盖 APT / DNF、缺少 tzdata、缺少 EPEL 等情况。
+- `tests/interactive.py` 的防火墙部分使用 `tests/stubs` 里的替身，覆盖各种交互分支；`tests/firewall_real.py` 在 CI 虚拟机上用真实的 UFW 和 Firewalld 跑启用、复查、撤销和测试失败回滚。
 
 ## 发布
 

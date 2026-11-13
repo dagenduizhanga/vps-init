@@ -42,7 +42,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 ### 2. SSH 密钥登录
 
 - 粘贴公钥或从 GitHub 账号导入；逐把校验、按指纹去重，误贴私钥会被拦下
-- 关闭密码登录和键盘交互认证，root 只能用密钥登录
+- 关闭密码登录和键盘交互认证，root 只能用密钥登录。注意这对**所有用户**生效；还没配置公钥的普通用户会被列出来提醒
 - 写入后用 `sshd -T` 按「root + 当前来源地址」核对最终生效值（包括 `Match` 规则），不符合就自动回滚
 - 完成后请你新开窗口测试；回答登录失败会立即撤销
 
@@ -58,7 +58,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 ### 4. 系统更新
 
-升级全部软件包，执行前需要确认。过程中不会弹出配置文件冲突等交互提示，需要重启时会提醒。
+升级全部软件包，执行前需要确认（自动化场景可用 `update --yes`）。过程中不会弹出配置文件冲突等交互提示，需要重启时会提醒。
 
 ## 命令行用法
 
@@ -73,7 +73,7 @@ bash <(curl -fsSL $I) ssh                      # SSH 向导
 bash <(curl -fsSL $I) ssh 'ssh-ed25519 AAAA…'  # 直接添加公钥并关闭密码登录，不提问
 bash <(curl -fsSL $I) ssh gh:你的GitHub用户名  # 导入该账号的全部公钥
 bash <(curl -fsSL $I) firewall
-bash <(curl -fsSL $I) update
+bash <(curl -fsSL $I) update                   # 升级软件包（会先确认；--yes 跳过确认）
 bash <(curl -fsSL $I) status
 ```
 
@@ -113,17 +113,21 @@ VPS_INIT_REF=<提交或标签> bash <(curl -fsSL https://raw.githubusercontent.c
 ## 开发
 
 ```bash
-bash tests/smoke.sh                # 冒烟测试，不需要 root、不修改系统
-sudo bash tests/ssh.sh             # SSH 模块：在本机真实 sshd 上应用、撤销、回滚，结束后恢复
-sudo python3 tests/interactive.py  # 交互流程：SSH 向导、主菜单、防火墙（需要 python3-pexpect）
+bash tests/smoke.sh                                    # 冒烟测试，不需要 root、不修改系统
+sudo bash tests/ssh.sh                                 # SSH 模块：在本机真实 sshd 上测试，结束后恢复
+sudo python3 tests/interactive.py                      # 交互流程（需要 python3-pexpect；防火墙用替身）
+sudo unshare --net -- python3 tests/firewall_real.py   # 真实 UFW：在隔离的网络命名空间里测试
+sudo bash tests/system.sh                              # 系统模块：会改时区、装软件、升级系统，只在一次性环境运行
 ```
+
+CI 在 Debian 11/12、Ubuntu 20.04/22.04/24.04、AlmaLinux 9 容器，以及带真实 systemd、UFW、Firewalld 的虚拟机上运行全部测试。
 
 ```text
 install.sh          远程启动器：下载源码到临时目录运行，结束后清理
 vps-init.sh         命令入口与交互菜单
 lib/common.sh       公共函数：界面输出、交互、任务执行、系统检测
 modules/            system.sh · ssh.sh · firewall.sh，每个模块都能单独运行
-tests/              冒烟测试、SSH 行为测试、交互测试，以及测试替身
+tests/              冒烟、SSH、系统、交互、真实防火墙测试，以及测试替身
 ssh-key-only.sh     旧版入口，等同于 ssh 子命令
 ```
 
