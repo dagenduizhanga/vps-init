@@ -13,7 +13,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 ```
 
 ```text
-  vps-init v0.4.0
+  vps-init v0.4.1
   ──────────────────────────────────────────────
   主机        vps-sg-1 · Debian GNU/Linux 12 (bookworm)
   SSH         密码登录开启中 · root 允许密码 · 0 把公钥
@@ -34,7 +34,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 ### 1. 系统初始化
 
-- 时区默认 `Asia/Shanghai`，也可以指定，例如 `system Asia/Singapore`
+- 时区默认 `Asia/Singapore`，也可以指定其他时区，例如 `system Asia/Shanghai`
 - 开启自动校时：优先使用已有的 Chrony 或 systemd-timesyncd，都没有时安装 Chrony
 - 补齐常用工具：curl、wget、git、vim、htop、unzip。某个包装不上（例如 RHEL 系的 htop 需要 EPEL）不影响其他包
 - 重复运行会自动跳过已完成的项目
@@ -67,8 +67,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 ```bash
 I=https://raw.githubusercontent.com/dagenduizhanga/vps-init/main/install.sh
 
-bash <(curl -fsSL $I) system                   # 系统初始化（默认 Asia/Shanghai）
-bash <(curl -fsSL $I) system Asia/Singapore    # 指定时区
+bash <(curl -fsSL $I) system                   # 系统初始化（默认 Asia/Singapore）
+bash <(curl -fsSL $I) system Asia/Shanghai     # 指定其他时区
 bash <(curl -fsSL $I) ssh                      # SSH 向导
 bash <(curl -fsSL $I) ssh 'ssh-ed25519 AAAA…'  # 直接添加公钥并关闭密码登录，不提问
 bash <(curl -fsSL $I) ssh gh:你的GitHub用户名  # 导入该账号的全部公钥

@@ -22,6 +22,7 @@ source "$ROOT/lib/common.sh"
 check "--version 与代码中的版本一致" is "$(bash "$ROOT/vps-init.sh" --version)" "vps-init $VPS_INIT_VERSION"
 help=$(bash "$ROOT/vps-init.sh" --help)
 for cmd in system ssh firewall update status; do check "帮助里有 $cmd 命令" contains "$help" "$cmd"; done
+check "默认时区为 Asia/Singapore" contains "$help" "默认 Asia/Singapore"
 check "未知命令返回 2" bash -c "bash '$ROOT/vps-init.sh' no-such-command; [[ \$? == 2 ]]"
 for module in system ssh firewall; do check "模块 $module 有帮助" bash "$ROOT/modules/$module.sh" --help; done
 check "旧入口 ssh-key-only.sh 转发到模块" contains "$(bash "$ROOT/ssh-key-only.sh" --help)" "--undo"
