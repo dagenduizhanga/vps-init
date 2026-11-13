@@ -2,7 +2,7 @@
 # vps-init 公共函数库：版本、界面输出、交互、任务执行、系统检测。
 # shellcheck disable=SC2034  # 颜色等变量供各模块使用
 
-VPS_INIT_VERSION="0.4.0"
+VPS_INIT_VERSION="0.4.1"
 VPS_INIT_RAW="https://raw.githubusercontent.com/dagenduizhanga/vps-init/${VPS_INIT_REF:-main}"
 VPS_INIT_LOG="${VPS_INIT_LOG:-/var/log/vps-init.log}"
 export PATH="$PATH:/usr/sbin:/sbin"

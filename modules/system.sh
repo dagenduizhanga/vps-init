@@ -5,7 +5,7 @@ MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/common.sh
 source "$MODULE_DIR/../lib/common.sh"
 
-DEFAULT_TZ=Asia/Shanghai
+DEFAULT_TZ=Asia/Singapore
 TOOLS=(curl wget git vim htop unzip)
 APT_REFRESHED=0
 
@@ -58,7 +58,7 @@ current_tz() {
 check_tz() {
   if [[ ! $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] ||
     { [[ -d /usr/share/zoneinfo ]] && [[ ! -e /usr/share/zoneinfo/$1 ]]; }; then
-    die "无效的时区：$1（例如 Asia/Shanghai、Asia/Singapore）"
+    die "无效的时区：$1（例如 Asia/Singapore、Asia/Shanghai）"
   fi
 }
 

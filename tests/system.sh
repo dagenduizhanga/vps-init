@@ -46,9 +46,9 @@ else
 fi
 
 echo "初始化"
-ok "一键初始化（Asia/Singapore）" bash "$SYSTEM" Asia/Singapore
+ok "一键初始化（不指定时区，使用默认值）" bash "$SYSTEM"
 cp "$work/out" "$work/init.out"
-ok "时区已设为 Asia/Singapore" test "$(tz_now)" = Asia/Singapore
+ok "默认时区为 Asia/Singapore" test "$(tz_now)" = Asia/Singapore
 for tool in curl wget git vim htop unzip; do
   # 装不上的包（例如 RHEL 系没有 EPEL 时的 htop）必须在提示里点名
   if command -v "$tool" >/dev/null; then
@@ -63,6 +63,8 @@ ok "再次运行时跳过已设置的时区" grep -q '时区已经是 Asia/Singa
 echo "状态"
 ok "状态页" bash "$SYSTEM" status
 ok "状态页显示时区" grep -q 'Asia/Singapore' "$work/last"
+ok "指定其他时区" bash "$SYSTEM" timezone Asia/Shanghai
+ok "时区已改为 Asia/Shanghai" test "$(tz_now)" = Asia/Shanghai
 
 if [[ ${SKIP_UPDATE:-} != 1 ]]; then
   echo "系统更新"
