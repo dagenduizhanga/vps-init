@@ -53,6 +53,8 @@ jobs:
       - name: 安装 OpenSSH
         run: |
           if command -v apt-get >/dev/null; then
+            # Debian 11 长期支持已结束，安全源的软件包已下架，改从主仓库安装
+            if grep -q bullseye /etc/os-release; then sed -i '/security/d' /etc/apt/sources.list; fi
             apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server
           else
             dnf install -y -q openssh-server openssh-clients util-linux && ssh-keygen -A

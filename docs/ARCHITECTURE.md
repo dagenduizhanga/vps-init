@@ -30,7 +30,7 @@
 ## 测试
 
 - 每个修改系统的分支（应用、撤销、回滚、拒绝）都应有行为测试，而不只是检查帮助文字。
-- `tests/ssh.sh` 在 CI 中于 Debian 11/12、Ubuntu 20.04/22.04/24.04、AlmaLinux 9 容器内运行，覆盖 OpenSSH 8.2–9.6；在 GitHub Ubuntu 主机上再以真实 systemd 运行一次。
+- `tests/ssh.sh` 在 CI 中于 Debian 11/12、Ubuntu 20.04/22.04/24.04、AlmaLinux 9 容器内运行，覆盖 OpenSSH 8.2 到 9.9；在 GitHub 的 Ubuntu 主机上再以真实 systemd 运行一次（目前为 OpenSSH 10.2）。
 - 防火墙测试使用 `tests/stubs/ufw` 和 `tests/stubs/ss` 替身，不触碰真实网络。
 
 ## 发布

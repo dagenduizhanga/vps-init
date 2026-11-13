@@ -39,6 +39,7 @@ ok() { local name=$1 rc=0; shift; "$@" >"$work/out" 2>&1 || rc=$?; report $((rc 
 fails() { local name=$1 rc=0; shift; "$@" >"$work/out" 2>&1 || rc=$?; report $((rc == 0)) "$name"; }
 eff() { sshd -T | awk -v k="$1" '$1 == k {print $2}'; }
 is() { [[ $1 == "$2" ]]; }
+matches() { [[ $1 =~ $2 ]]; }
 nkeys() { grep -c . "$AUTH" 2>/dev/null || true; }
 clean() { rm -rf "$DROP" "$EARLY" "$STATE" "$AUTH"; cp -a "$work/sshd_config" "$CONF"; }
 
@@ -61,7 +62,7 @@ echo "应用与撤销"
 ok "添加公钥并关闭密码登录" bash "$SSH" "$K1"
 ok "密码登录已关闭" is "$(eff passwordauthentication)" no
 ok "键盘交互认证已关闭" is "$(eff kbdinteractiveauthentication)" no
-ok "root 仅允许密钥" is "$(eff permitrootlogin)" without-password
+ok "root 仅允许密钥" matches "$(eff permitrootlogin)" '^(prohibit|without)-password$' # OpenSSH 10 起显示为 prohibit-password
 ok "重复运行（同一把钥匙换了备注）" bash "$SSH" "${K1/laptop/termius}"
 ok "公钥没有重复添加" is "$(nkeys)" 1
 ok "一次添加多把公钥" bash "$SSH" "$K1"$'\n'"$K2"
@@ -84,7 +85,7 @@ ok "回滚后不留配置和状态" is "$(ls "$DROP" "$STATE" 2>/dev/null)" ""
 clean
 sed -i 's/^[[:space:]]*Include/#&/I' "$CONF"
 fails "sshd_config 没有 Include 时拒绝" bash "$SSH" "$K1"
-ok "没有改动主配置" cmp -s "$CONF" <(sed 's/^[[:space:]]*Include/#&/I' "$work/sshd_config")
+ok "没有改动主配置" is "$(cat "$CONF")" "$(sed 's/^[[:space:]]*Include/#&/I' "$work/sshd_config")"
 
 echo "不覆盖用户配置、兼容旧版本"
 clean
