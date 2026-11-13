@@ -160,6 +160,13 @@ def test_menu_returns_after_cancel():
     assert finish(c) == 0
 
 
+def test_update_asks_first_and_can_cancel():
+    c = spawn("modules/system.sh", "update")
+    c.expect("开始更新"); c.sendline("")  # 直接回车 = 不更新
+    c.expect("已取消，系统没有任何修改")
+    assert finish(c) == 0
+
+
 # ---------------- 防火墙 ----------------
 def test_firewall_enable_pick_ports_and_undo():
     reset_fw()
