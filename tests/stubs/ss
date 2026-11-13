@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# 测试替身：输出 $SS_STUB_FILE 里预设的监听端口
+cat "${SS_STUB_FILE:?}"
