@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SSH 模块行为测试：在真实 sshd 上应用、撤销和回滚。需要 root，会临时修改本机 SSH 配置，测试结束后恢复。
+# SSH 模块行为测试：在真实 sshd 上应用、撤销和回滚。会重置测试用的 SSH 配置和状态，只在一次性环境中运行。
 # CI 会在多个发行版容器里运行；没有 systemd 时使用 tests/stubs 里的 systemctl 替身。
 set -Eeuo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -54,6 +54,8 @@ clean
 PW_BEFORE=$(eff passwordauthentication)
 
 echo "输入校验"
+fails "没有公钥时不能复用已有配置" bash "$SSH" --use-existing
+ok "缺公钥时不创建 authorized_keys" test ! -e "$AUTH"
 fails "拒绝占位符公钥" bash "$SSH" 'ssh-ed25519 AAAA... 这里替换为你的公钥'
 fails "拒绝私钥" bash "$SSH" "$(cat "$work/k1")"
 fails "拒绝明文 http 网址" bash "$SSH" http://example.com/key.pub
@@ -74,8 +76,45 @@ ok "撤销后恢复原登录方式" is "$(eff passwordauthentication)" "$PW_BEFO
 ok "撤销后不留配置和状态" is "$(ls "$DROP" "$STATE" 2>/dev/null)" ""
 ok "撤销保留已添加的公钥" is "$(nkeys)" 2
 ok "没有配置时撤销也正常退出" bash "$SSH" --undo
+ok "统一入口可非交互复用已有公钥" bash "$ROOT/vps-init.sh" ssh --use-existing
+ok "复用后没有增加公钥" is "$(nkeys)" 2
+ok "复用后密码登录已关闭" is "$(eff passwordauthentication)" no
+ok "复用后可以撤销" bash "$SSH" --undo
 
 echo "安全回滚"
+clean
+echo 'AuthorizedKeysFile /etc/ssh/keys/%u' >"$EARLY"
+fails "sshd 没有读取本工具写入的公钥文件时拒绝" bash "$SSH" "$K1"
+ok "公钥路径不符时恢复配置" test ! -e "$DROP"
+clean
+echo 'AuthorizedKeysFile none' >"$EARLY"
+fails "禁用文件公钥时拒绝" bash "$SSH" "$K1"
+clean
+echo 'AuthorizedKeysFile /etc/ssh/keys/%u %h/.ssh/authorized_keys' >"$EARLY"
+ok "多个公钥路径中有实际文件即可应用" bash "$SSH" "$K1"
+clean
+echo 'AuthenticationMethods publickey,publickey' >"$EARLY"
+fails "需要两把不同公钥时拒绝" bash "$SSH" "$K1"
+ok "认证方式冲突时恢复配置" test ! -e "$DROP"
+clean
+printf '\nMatch LocalPort 2222\n    PasswordAuthentication yes\n' >>"$CONF"
+fails "校验当前连接本地端口的 Match 规则" env SSH_CONNECTION='192.0.2.1 50812 192.0.2.2 2222' bash "$SSH" "$K1"
+ok "端口分支冲突时恢复配置" test ! -e "$DROP"
+clean
+mkdir "$work/dns"
+cat >"$work/dns/getent" <<'EOF'
+#!/bin/sh
+case "$*" in
+  "hosts 192.0.2.1") echo '192.0.2.1 client.example' ;;
+  "ahosts client.example") echo '192.0.2.1 STREAM client.example' ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$work/dns/getent"
+printf 'UseDNS yes\n' >"$EARLY"
+printf '\nMatch Host client.example\n    PasswordAuthentication yes\n' >>"$CONF"
+fails "UseDNS 开启时校验客户端主机名" env PATH="$work/dns:$PATH" SSH_CONNECTION='192.0.2.1 50812 192.0.2.2 22' bash "$SSH" "$K1"
+ok "Match Host 生效时撤销本次配置" test ! -e "$DROP"
 clean
 echo 'PasswordAuthentication yes' >"$EARLY"
 fails "被更早的配置覆盖时拒绝" bash "$SSH" "$K1"
@@ -115,6 +154,14 @@ clean
 echo 'PasswordAuthentication no' >"$DROP"
 fails "拒绝覆盖用户自己的同名文件" bash "$SSH" "$K1"
 ok "用户的文件原样保留" grep -qx 'PasswordAuthentication no' "$DROP"
+ok "拒绝接管时没有添加公钥" test ! -e "$AUTH"
+clean
+ok "先应用本工具的配置" bash "$SSH" "$K1"
+echo '# administrator replacement' >"$DROP"
+fails "有旧记录时也不覆盖管理员替换的配置" bash "$SSH" "$K2"
+fails "撤销也保留管理员替换的配置" bash "$SSH" --undo
+ok "管理员文件和原先的公钥都保留" grep -qx '# administrator replacement' "$DROP"
+ok "替换配置后没有写入第二把公钥" is "$(nkeys)" 1
 clean
 printf '# 由 ssh-key-only.sh 生成\nPasswordAuthentication no\n' >"$DROP"
 ok "接管早期版本写入的配置" bash "$SSH" "$K1"

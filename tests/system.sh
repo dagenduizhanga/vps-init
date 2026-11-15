@@ -41,6 +41,8 @@ ok "无效时区报错" test "$rc" -ne 0
 ok "提示无效的时区" contains "$output" "无效的时区：Mars/Base"
 if ((had_zoneinfo)); then
   ok "报错发生在开始执行之前" lacks "$output" "[1/3]"
+  fails "时区目录不能用作时区文件" bash "$SYSTEM" timezone Asia
+  fails "时区数据库的文本清单也不能用作时区文件" bash "$SYSTEM" timezone zone.tab
 else
   ok "缺少时区数据时先安装 tzdata" contains "$output" "安装时区数据 tzdata"
 fi
@@ -66,10 +68,50 @@ ok "状态页显示时区" grep -q 'Asia/Singapore' "$work/last"
 ok "指定其他时区" bash "$SYSTEM" timezone Asia/Shanghai
 ok "时区已改为 Asia/Shanghai" test "$(tz_now)" = Asia/Shanghai
 
+# 在受控的包管理器上模拟整批成功和只安装了第一项就失败的情况。
+# shellcheck disable=SC2317,SC2329  # 模拟函数由模块中的 install_tools 和 run_task 间接调用
+exercise_batch() (
+  local mode=$1 candidate
+  # shellcheck source=/dev/null
+  source "$SYSTEM"
+  # shellcheck disable=SC2034  # install_tools 读取这份受控工具清单
+  TOOLS=(curl wget htop)
+  mkdir "$work/$mode"
+  command_exists() { [[ -f $work/$mode/$1 ]]; }
+  pkg_refresh() { :; }
+  pkg_install() {
+    echo "$*" >>"$work/$mode/calls"
+    for candidate in "$@"; do
+      if [[ $mode == partial && $candidate == wget ]]; then return 1; fi
+      touch "$work/$mode/$candidate"
+    done
+  }
+  install_tools
+  if [[ $mode == full ]]; then install_tools; fi
+)
+ok "整批安装后再次初始化" exercise_batch full
+ok "两次初始化只调用一次包管理器" test "$(cat "$work/full/calls")" = 'curl wget htop'
+ok "批量部分失败后继续安装其余工具" exercise_batch partial
+ok "失败项单独提示" grep -q '未能安装：wget' "$work/last"
+ok "仅重试仍缺少的工具" test "$(cat "$work/partial/calls")" = $'curl wget htop\nwget\nhtop'
+
+mkdir "$work/bin"
+cat >"$work/bin/apt-get" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$APT_CALLS"
+[[ $1 != update ]] || exit 100
+EOF
+chmod +x "$work/bin/apt-get"
+mock_apt=(env "PATH=$work/bin:$PATH" "APT_CALLS=$work/apt.calls" bash "$ROOT/vps-init.sh" update)
+fails "选项有误时拒绝升级" "${mock_apt[@]}" --yes --typo
+ok "参数错误时没有调用包管理器" test ! -e "$work/apt.calls"
+fails "刷新失败时自动更新返回错误" "${mock_apt[@]}" --yes
+ok "刷新失败后没有运行 upgrade" test "$(cat "$work/apt.calls")" = 'update -q --error-on=any'
+
 if [[ ${SKIP_UPDATE:-} != 1 ]]; then
   echo "系统更新"
   if command -v setsid >/dev/null; then
-    fails "没有终端、也没有 --yes 时不会更新" setsid -w bash -c "bash '$SYSTEM' update </dev/null | grep -q 系统更新完成"
+    fails "没有终端、也没有 --yes 时返回错误" setsid -w bash "$SYSTEM" update </dev/null
   fi
   ok "update --yes" bash "$SYSTEM" update --yes
   ok "提示更新完成" grep -q '系统更新完成' "$work/last"

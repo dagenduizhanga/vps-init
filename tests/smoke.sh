@@ -33,6 +33,9 @@ for section in 系统 SSH 防火墙 时区 自动校时; do check "状态页包�
 check "中文按 2 列对齐" is "$(ui_pad 防火墙 10)|" "防火墙    |"
 check "中英混排对齐" is "$(ui_pad 'root 登录' 12)|" "root 登录   |"
 check "SSH 端口取自当前连接" is "$(SSH_CONNECTION='198.51.100.10 54321 192.0.2.20 2222' detect_ssh_port)" 2222
+check "前导零按十进制处理" is "$(port_number 00089)" 89
+multiple_ports() { sshd() { printf 'port 22\nport 2222\n'; }; unset SSH_CONNECTION; ! detect_ssh_port; }
+check "控制台遇到多个 SSH 端口时拒绝猜测" multiple_ports
 check "端口无效时拒绝猜测" bash -c "source '$ROOT/lib/common.sh'; PATH=/nonexistent; SSH_CONNECTION='1 2 3 99999' detect_ssh_port; [[ \$? != 0 ]]"
 
 printf '\n冒烟测试%s\n' "$( ((failed == 0)) && echo '全部通过' || echo "失败 $failed 项")"
