@@ -13,8 +13,8 @@ vps-init $VPS_INIT_VERSION — 新 VPS 初始化工具
 
   （无参数）       打开交互菜单
   system [时区]    系统初始化：时区（默认 Asia/Singapore）、自动校时、常用工具
-  ssh [公钥]       SSH 密钥登录；可直接传入公钥、gh:用户名 或 https 网址，--undo 撤销
-  firewall         放行 SSH 后启用防火墙；--undo 撤销
+  ssh [公钥]       可传入公钥、gh:用户名 或 HTTPS 地址；--use-existing 复用已有公钥，--undo 撤销
+  firewall         放行 SSH 后启用防火墙；--allow 443 53/udp 指定额外端口，--undo 撤销
   update [--yes]   升级系统软件包（需要确认；--yes 用于自动化）
   status           查看系统、SSH、防火墙状态
   --version        显示版本

@@ -75,8 +75,8 @@ def reset():
     assert not active()
 
 
-def spawn(port, *args):
-    child = pexpect.spawn("bash", ["modules/firewall.sh", *args], cwd=ROOT, env=env(port),
+def spawn(port, *args, extra_env=None):
+    child = pexpect.spawn("bash", ["modules/firewall.sh", *args], cwd=ROOT, env={**env(port), **(extra_env or {})},
                           encoding="utf-8", timeout=120)
     child.logfile_read = open(os.path.join(WORK, "last.log"), "w")
     return child
@@ -144,6 +144,58 @@ def check_ufw_existing_rules():
         assert sh("ufw", "show", "added").stdout == before, f"{rule} 后不应再添加规则"
 
 
+def check_ufw_scoped_ssh():
+    reset()
+    sh("ufw", "allow", "from", "192.0.2.11", "to", "any", "port", "2222", "proto", "tcp").check_returncode()
+    for running in (False, True):
+        if running:
+            sh("ufw", "--force", "enable").check_returncode()
+        before = sh("ufw", "show", "added").stdout
+        c = spawn(2222)
+        c.expect("请检查已有规则")
+        assert finish(c) != 0 and active() == running
+        assert sh("ufw", "show", "added").stdout == before
+
+
+def check_firewalld_layers():
+    for original, missing in ((["--permanent"], []), ([], ["--permanent"])):
+        reset()
+        sh("systemctl", "start", "firewalld").check_returncode()
+        sh("firewall-cmd", *original, "--add-port=2222/tcp").check_returncode()
+        assert enable(2222, "y") == 0 and allowed(2222)
+        c = spawn(2222, "--undo")
+        c.expect("确认撤销"); c.sendline("y")
+        assert finish(c) == 0 and active()
+        assert sh("firewall-cmd", *original, "--query-port=2222/tcp").returncode == 0
+        assert sh("firewall-cmd", *missing, "--query-port=2222/tcp").returncode == 1
+
+
+def check_firewalld_partial_failure():
+    reset()
+    sh("systemctl", "start", "firewalld").check_returncode()
+    real_cmd = shutil.which("firewall-cmd")
+    shim = os.path.join(WORK, "firewall-cmd")
+    with open(shim, "w") as f:
+        f.write('#!/bin/sh\ncase " $* " in\n'
+                '  *" --permanent "*) ;;\n  *" --add-port=2222/tcp "*) exit 1 ;;\nesac\n'
+                'exec "$REAL_FIREWALL_CMD" "$@"\n')
+    os.chmod(shim, 0o755)
+    c = spawn(2222, extra_env={"PATH": WORK + ":" + os.environ["PATH"], "REAL_FIREWALL_CMD": real_cmd})
+    c.expect("确认执行"); c.sendline("y")
+    assert finish(c) != 0
+    assert active()
+    for scope in ([], ["--permanent"]):
+        assert sh("firewall-cmd", *scope, "--query-port=2222/tcp").returncode == 1
+    assert not os.path.exists(os.path.join(STATE_DIR, "firewall.state"))
+
+
+def check_firewalld_pre_enabled():
+    reset()
+    sh("systemctl", "enable", "firewalld").check_returncode()
+    assert enable(2222, "n") == 0
+    assert not active() and sh("systemctl", "is-enabled", "--quiet", "firewalld").returncode == 0
+
+
 def main():
     if os.geteuid() != 0:
         sys.exit("需要 root 运行")
@@ -155,6 +207,14 @@ def main():
     ]
     if BACKEND == "ufw" and os.path.exists("/etc/ufw/applications.d/openssh-server"):
         cases.append(("识别已有的 22 / OpenSSH / limit 规则", check_ufw_existing_rules))
+    if BACKEND == "ufw":
+        cases.append(("保留限制来源的 SSH 规则", check_ufw_scoped_ssh))
+    if BACKEND == "firewalld":
+        cases.extend([
+            ("只补齐缺少的一层，撤销保留原来的一层", check_firewalld_layers),
+            ("永久规则成功、运行时添加失败时完整回滚", check_firewalld_partial_failure),
+            ("撤销后保留原有的开机自启设置", check_firewalld_pre_enabled),
+        ])
     failed = 0
     try:
         for name, case in cases:

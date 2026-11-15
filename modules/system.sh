@@ -30,7 +30,7 @@ pkg_manager() {
 }
 
 pkg_install() {
-  case $(pkg_manager) in
+  case $PM in
     apt) DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@" ;;
     dnf) dnf install -y -q "$@" ;;
     yum) yum install -y -q "$@" ;;
@@ -41,7 +41,7 @@ pkg_install() {
 
 # APT 安装前刷新一次软件源；失败也继续，用本地缓存尝试安装
 pkg_refresh() {
-  [[ $(pkg_manager) == apt ]] && ((APT_REFRESHED == 0)) || return 0
+  [[ $PM == apt ]] && ((APT_REFRESHED == 0)) || return 0
   run_task "刷新软件源" apt-get update -q || log_warn "软件源刷新失败，继续尝试安装"
   APT_REFRESHED=1
 }
@@ -56,15 +56,17 @@ current_tz() {
 
 # 检查时区名；系统还没装时区数据时只检查格式，装好后再确认
 check_tz() {
-  if [[ ! $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] ||
-    { [[ -d /usr/share/zoneinfo ]] && [[ ! -e /usr/share/zoneinfo/$1 ]]; }; then
-    die "无效的时区：$1（例如 Asia/Singapore、Asia/Shanghai）"
+  local magic=''
+  if [[ $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]]; then
+    [[ -d /usr/share/zoneinfo ]] || return 0
+    if [[ -f /usr/share/zoneinfo/$1 ]] && IFS= read -r -N 4 magic <"/usr/share/zoneinfo/$1" &&
+      [[ $magic == TZif ]]; then return 0; fi
   fi
+  die "无效的时区：$1（例如 Asia/Singapore、Asia/Shanghai）"
 }
 
 set_timezone() {
   local zone=$1 current
-  check_tz "$zone"
   if [[ ! -d /usr/share/zoneinfo ]]; then
     pkg_refresh
     run_task "安装时区数据 tzdata" pkg_install tzdata || die "安装 tzdata 失败，无法设置时区"
@@ -135,9 +137,13 @@ install_tools() {
     return 0
   fi
   pkg_refresh
-  # 逐个安装：某个包不可用（例如 RHEL 系的 htop 需要 EPEL）不影响其他包
+  # 常见情况只运行一次包管理器。部分成功或有包不可用时，只补装仍缺少的命令。
+  if ((${#missing[@]} > 1)); then
+    run_task "批量安装 ${missing[*]}" pkg_install "${missing[@]}" || log_warn "将逐项补装仍缺少的工具"
+  fi
   for tool in "${missing[@]}"; do
-    run_task "安装 $tool" pkg_install "$tool" || failed+=("$tool")
+    command_exists "$tool" && continue
+    { run_task "安装 $tool" pkg_install "$tool" && command_exists "$tool"; } || failed+=("$tool")
   done
   if ((${#failed[@]})); then
     log_warn "未能安装：${failed[*]}（RHEL 系可先运行 dnf install -y epel-release 再重试）"
@@ -166,20 +172,19 @@ initialize() {
 }
 
 update_system() {
-  local pm yes=0
-  [[ ${1-} == -y || ${1-} == --yes ]] && yes=1
+  (($# == 0)) || { (($# == 1)) && [[ $1 == -y || $1 == --yes ]]; } ||
+    die "用法：update [--yes]"
   require_root
-  pm=$(pkg_manager)
-  [[ $pm != none ]] || die "不支持当前系统的包管理器"
+  [[ $PM != none ]] || die "不支持当前系统的包管理器"
   ui_title "系统更新" "升级全部软件包。可能包含内核更新，相关服务会自动重启。"
-  if ((!yes)) && ! confirm "开始更新？"; then
-    log_info "已取消，系统没有任何修改"
-    return 0
+  if (($# == 0)); then
+    has_tty || die "没有交互终端；自动更新请显式使用 update --yes"
+    confirm "开始更新？" || { log_info "已取消，系统没有任何修改"; return 0; }
   fi
   printf '\n'
-  case $pm in
+  case $PM in
     apt)
-      pkg_refresh
+      run_task "刷新软件源" apt-get update -q --error-on=any || die "软件源刷新失败，已停止升级"
       # 输出写入日志，必须避免任何交互提示：保留现有配置文件、自动重启受影响的服务
       run_task "升级软件包（可能需要几分钟）" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
         apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
@@ -226,16 +231,28 @@ summary() { printf '%s · 自动校时 %s\n' "$(current_tz)" "$(time_sync_text)"
 main() {
   local cmd=${1:-init}
   (($#)) && shift
+  PM=$(pkg_manager)
   case $cmd in
-    init) initialize "$@" ;;
-    */*) initialize "$cmd" ;; # system Asia/Singapore 等同于 system init Asia/Singapore
+    init) (($# <= 1)) || die "用法：system [时区]"; initialize "$@" ;;
     update) update_system "$@" ;;
-    timezone) require_root; set_timezone "${1:-$DEFAULT_TZ}" ;;
+    timezone)
+      (($# <= 1)) || die "用法：timezone [时区]"
+      require_root
+      check_tz "${1:-$DEFAULT_TZ}"
+      set_timezone "${1:-$DEFAULT_TZ}"
+      ;;
     status) status ;;
     summary) summary ;;
     -h | --help) usage ;;
-    *) log_error "未知命令：$cmd"; usage >&2; exit 2 ;;
+    *)
+      if [[ $cmd == */* || $cmd == UTC || -f /usr/share/zoneinfo/$cmd ]]; then
+        (($# == 0)) || die "用法：system [时区]"
+        initialize "$cmd"
+      else
+        log_error "未知命令：$cmd"; usage >&2; exit 2
+      fi
+      ;;
   esac
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

@@ -2,7 +2,7 @@
 # vps-init 公共函数库：版本、界面输出、交互、任务执行、系统检测。
 # shellcheck disable=SC2034  # 颜色等变量供各模块使用
 
-VPS_INIT_VERSION="0.4.1"
+VPS_INIT_VERSION="0.5.0"
 VPS_INIT_RAW="https://raw.githubusercontent.com/dagenduizhanga/vps-init/${VPS_INIT_REF:-main}"
 VPS_INIT_LOG="${VPS_INIT_LOG:-/var/log/vps-init.log}"
 export PATH="$PATH:/usr/sbin:/sbin"
@@ -99,6 +99,14 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 is_root() { [[ ${EUID:-$(id -u)} -eq 0 ]]; }
 require_root() { is_root || die "请使用 root 运行"; }
 
+# 同一模块的应用和撤销共用一把锁，子命令退出时由内核释放。
+lock_module() {
+  command_exists flock || return 0
+  [[ -d /run/lock ]] || install -d -m 755 /run/lock
+  exec 9>"/run/lock/vps-init-$1.lock"
+  flock -n 9 || die "另一个 $1 配置任务正在运行"
+}
+
 detect_os() {
   [[ -r /etc/os-release ]] || die "无法识别系统：缺少 /etc/os-release"
   # shellcheck source=/dev/null
@@ -106,13 +114,21 @@ detect_os() {
   OS_ID=${ID:-unknown} OS_NAME=${PRETTY_NAME:-${ID:-Linux}}
 }
 
-# 当前 SSH 服务端口：优先取本次连接实际使用的端口，其次取 sshd 配置；都拿不到就失败，绝不猜默认值
+port_number() {
+  [[ $1 =~ ^[0-9]{1,5}$ ]] || return 1
+  local n=$((10#$1))
+  ((n >= 1 && n <= 65535)) || return 1
+  printf '%s\n' "$n"
+}
+
+# 没有当前连接时，只有 sshd 的端口唯一才能确定要放行哪个。
 detect_ssh_port() {
-  local port=''
-  [[ -n ${SSH_CONNECTION:-} ]] && port=$(awk '{print $4}' <<<"$SSH_CONNECTION")
-  if [[ -z $port ]] && command_exists sshd; then
-    port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}') || true
+  local port='' extra
+  if [[ -n ${SSH_CONNECTION:-} ]]; then
+    read -r _ _ _ port extra <<<"$SSH_CONNECTION"
+    [[ -z $extra ]] || return 1
+  elif command_exists sshd; then
+    port=$(sshd -T 2>/dev/null | awk '$1 == "port" && !seen[$2]++ {print $2}') || return 1
   fi
-  [[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) || return 1
-  printf '%s\n' "$port"
+  port_number "$port"
 }

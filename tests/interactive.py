@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """交互流程测试：用 pexpect 模拟真实终端，覆盖 SSH 向导、主菜单和防火墙。
 
-需要 root 和 python3-pexpect。防火墙使用 tests/stubs 里的 UFW 替身，不会改动真实防火墙；
+在一次性环境中以 root 运行，需要 python3-pexpect。防火墙使用 tests/stubs 里的 UFW 替身；
 SSH 向导会在本机 sshd 上应用后再撤销。
 """
 import os
@@ -128,7 +128,7 @@ def test_ssh_wizard_mistakes_then_revert():
     c.expect("添加上面 2 把公钥")
     c.expect("确认执行"); c.sendline("y")
     c.expect("新窗口登录成功了吗"); c.sendline("n")
-    c.expect("已恢复密码登录")
+    c.expect("已恢复本次运行前的 SSH 配置")
     assert finish(c) == 0
     assert not os.path.exists(DROP) and not os.path.exists(SSH_STATE)
 
@@ -142,6 +142,24 @@ def test_ssh_wizard_use_existing_then_cancel():
     c.expect("已取消，没有做任何修改")
     assert finish(c) == 1
     assert not os.path.exists(DROP)
+
+
+def test_ssh_repeated_wizard_reverts_only_this_run():
+    reset_ssh([K1])
+    subprocess.run(["bash", "modules/ssh.sh", "--use-existing"], cwd=ROOT, env=ENV,
+                   capture_output=True, check=True)
+    with open(DROP, "ab") as f:
+        f.write(b"# initial managed file\n\n")
+    with open(DROP, "rb") as f:
+        before = f.read()
+    c = spawn("modules/ssh.sh")
+    c.expect("请选择"); c.sendline("3")
+    c.expect("确认执行"); c.sendline("y")
+    c.expect("新窗口登录成功了吗"); c.sendline("n")
+    assert finish(c) == 0
+    with open(DROP, "rb") as f:
+        assert f.read() == before
+    assert os.path.isfile(os.path.join(SSH_STATE, "managed"))
 
 
 # ---------------- 主菜单 ----------------
@@ -209,6 +227,56 @@ def test_firewall_failed_test_reverts():
     c.expect("已撤销本次修改")
     assert finish(c) == 0
     assert ufw_state() == (False, []) and fw_state_file() is None
+
+
+def test_firewall_explicit_ports_and_retry_undo():
+    reset_fw(rules=["allow 443/tcp"])
+    args = ["vps-init.sh", "firewall", "--allow", "443", "00053/udp", "53/udp"]
+    c = spawn(*args)
+    assert c.expect(["确认执行", "要一并放行哪些"]) == 0
+    c.sendline("y")
+    c.expect("新窗口能连上吗"); c.sendline("y")
+    assert finish(c) == 0
+    rules = ["allow 443/tcp", "allow 22/tcp", "allow 53/udp"]
+    assert ufw_state() == (True, rules)
+    before = fw_state_file()
+    again = subprocess.run(["bash", *args], cwd=ROOT, env=ENV, start_new_session=True,
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
+    assert "无需修改" in again.stdout and fw_state_file() == before
+
+    def undo(fail_command):
+        c = spawn("modules/firewall.sh", "--undo", env=dict(ENV, UFW_STUB_FAIL=fail_command))
+        c.expect("确认撤销"); c.sendline("y")
+        return finish(c)
+
+    assert undo("disable") != 0
+    assert ufw_state() == (True, rules) and fw_state_file() == before
+    assert undo("delete allow 22/tcp") != 0
+    assert ufw_state() == (False, rules[:2])
+    assert "rules=22/tcp\n" in fw_state_file() and "enabled=0" in fw_state_file()
+    assert undo("") == 0
+    assert ufw_state() == (False, ["allow 443/tcp"]) and fw_state_file() is None
+
+
+def test_firewall_rejects_invalid_ports_before_changes():
+    reset_fw()
+    for args in (["--allow"], ["--allow", "443", "65536"], ["--allow", "53/sctp"]):
+        c = spawn("vps-init.sh", "firewall", *args)
+        assert finish(c) != 0, args
+        assert ufw_state() == (False, []) and fw_state_file() is None
+
+
+def test_firewall_does_not_adopt_rule_added_during_confirmation():
+    reset_fw(active=True, rules=["allow 22/tcp"])
+    c = spawn("modules/firewall.sh", "--allow", "443")
+    c.expect("确认执行")
+    with open(os.path.join(UFW_DIR, "rules"), "a") as f:
+        f.write("allow 443/tcp\n")
+    c.sendline("y")
+    c.expect("新窗口能连上吗"); c.sendline("n")
+    assert finish(c) == 0
+    assert ufw_state() == (True, ["allow 22/tcp", "allow 443/tcp"])
+    assert fw_state_file() is None
 
 
 def test_firewall_recognises_existing_ssh_rules():

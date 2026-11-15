@@ -13,7 +13,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 ```
 
 ```text
-  vps-init v0.4.1
+  vps-init v0.5.0
   ──────────────────────────────────────────────
   主机        vps-sg-1 · Debian GNU/Linux 12 (bookworm)
   SSH         密码登录开启中 · root 允许密码 · 0 把公钥
@@ -36,14 +36,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 - 时区默认 `Asia/Singapore`，也可以指定其他时区，例如 `system Asia/Shanghai`
 - 开启自动校时：优先使用已有的 Chrony 或 systemd-timesyncd，都没有时安装 Chrony
-- 补齐常用工具：curl、wget、git、vim、htop、unzip。某个包装不上（例如 RHEL 系的 htop 需要 EPEL）不影响其他包
+- 批量补齐缺少的 curl、wget、git、vim、htop、unzip。部分安装失败时，只逐个重试仍缺少的工具
 - 重复运行会自动跳过已完成的项目
 
 ### 2. SSH 密钥登录
 
 - 粘贴公钥或从 GitHub 账号导入；逐把校验、按指纹去重，误贴私钥会被拦下
 - 关闭密码登录和键盘交互认证，root 只能用密钥登录。注意这对**所有用户**生效；还没配置公钥的普通用户会被列出来提醒
-- 写入后用 `sshd -T` 按「root + 当前来源地址」核对最终生效值（包括 `Match` 规则），不符合就自动回滚
+- 如果已经用 root 的公钥登录过这台服务器，可运行 `ssh --use-existing`，跳过粘贴和向导
+- 写入后用 `sshd -T -C` 检查当前 root 连接的规则、实际读取的公钥文件和单把公钥能否满足认证策略。校验失败会恢复本次运行前的配置
 - 完成后请你新开窗口测试；回答登录失败会立即撤销
 
 ### 3. 防火墙
@@ -51,6 +52,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 - 只使用已安装的 UFW 或 Firewalld，不擅自安装
 - 先放行当前 SSH 端口：从本次连接读取，读不到就停止，不会猜默认的 22
 - 启用前列出会被挡住的服务（例如 MoviePilot、Jellyfin 的端口），由你选择是否一并放行
+- 已知道业务端口时，可用 `firewall --allow 443 53/udp`。单独的数字表示 TCP。已有防火墙也可补放端口，所有请求都已满足时可在无终端环境直接返回成功
 - 能识别已有的各种放行写法：`22`、`22/tcp`、`OpenSSH`、`limit`、Firewalld 的 `ssh` 服务
 - 完成后同样请你新开窗口测试，失败立即撤销。撤销时，如果防火墙是本工具启用的，会一并关闭
 
@@ -58,7 +60,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/dagenduizhanga/vps-init/main
 
 ### 4. 系统更新
 
-升级全部软件包，执行前需要确认（自动化场景可用 `update --yes`）。过程中不会弹出配置文件冲突等交互提示，需要重启时会提醒。
+升级系统软件包，执行前需要确认（自动化场景可用 `update --yes`）。APT 软件源刷新失败时会终止升级并返回非零退出码。过程中不会弹出配置文件冲突等交互提示，需要重启时会提醒。
 
 ## 命令行用法
 
@@ -72,7 +74,9 @@ bash <(curl -fsSL $I) system Asia/Shanghai     # 指定其他时区
 bash <(curl -fsSL $I) ssh                      # SSH 向导
 bash <(curl -fsSL $I) ssh 'ssh-ed25519 AAAA…'  # 直接添加公钥并关闭密码登录，不提问
 bash <(curl -fsSL $I) ssh gh:你的GitHub用户名  # 导入该账号的全部公钥
+bash <(curl -fsSL $I) ssh --use-existing       # 已确认 root 能用现有公钥登录时使用
 bash <(curl -fsSL $I) firewall
+bash <(curl -fsSL $I) firewall --allow 443 53/udp  # 跳过选端口；有修改时仍需确认和新连接验证
 bash <(curl -fsSL $I) update                   # 升级软件包（会先确认；--yes 跳过确认）
 bash <(curl -fsSL $I) status
 ```
@@ -83,6 +87,8 @@ bash <(curl -fsSL $I) status
 bash <(curl -fsSL $I) ssh --undo       # 恢复原来的 SSH 登录方式（已添加的公钥保留）
 bash <(curl -fsSL $I) firewall --undo  # 删除本工具添加的规则；防火墙是本工具启用的就一并关闭
 ```
+
+如果防火墙关闭失败，SSH 放行规则会保留。某条规则删除失败时，修复报错原因后可再次运行 `firewall --undo` 继续撤销。Firewalld 的运行时和永久规则分别记录。
 
 ### 固定版本
 
@@ -114,8 +120,8 @@ VPS_INIT_REF=<提交或标签> bash <(curl -fsSL https://raw.githubusercontent.c
 
 ```bash
 bash tests/smoke.sh                                    # 冒烟测试，不需要 root、不修改系统
-sudo bash tests/ssh.sh                                 # SSH 模块：在本机真实 sshd 上测试，结束后恢复
-sudo python3 tests/interactive.py                      # 交互流程（需要 python3-pexpect；防火墙用替身）
+sudo bash tests/ssh.sh                                 # 一次性容器或虚拟机：修改并测试真实 sshd 配置
+sudo python3 tests/interactive.py                      # 一次性环境：测试真实 SSH 向导，防火墙用替身
 sudo unshare --net -- python3 tests/firewall_real.py   # 真实 UFW：在隔离的网络命名空间里测试
 sudo bash tests/system.sh                              # 系统模块：会改时区、装软件、升级系统，只在一次性环境运行
 ```

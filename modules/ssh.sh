@@ -6,8 +6,8 @@ MODULE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$MODULE_DIR/../lib/common.sh"
 
 DROP=/etc/ssh/sshd_config.d/00-key-only.conf
-AUTH=/root/.ssh/authorized_keys
-LOCK=/run/lock/vps-init-ssh.lock
+ROOT_HOME=~root
+AUTH=$ROOT_HOME/.ssh/authorized_keys
 SIGNATURE='由 ssh-key-only.sh 生成' # 本工具写入的配置都带这句，用来识别
 # 状态文件格式与 0.3.x 保持一致，旧版本留下的记录可以直接撤销
 STATE=/var/lib/vps-init/ssh
@@ -23,6 +23,7 @@ usage() {
   'ssh-ed25519 AAAA…' 直接添加这把公钥（多行即多把）
   gh:<用户名>         导入 github.com/<用户名>.keys 上的全部公钥
   https://…           从网址获取公钥
+  --use-existing      使用 root 已有的公钥关闭密码登录，无需交互
   --undo              撤销：恢复原来的登录方式（已添加的公钥保留）
   status              查看 SSH 登录状态
 EOF
@@ -80,6 +81,7 @@ sshd_version() { { ssh -V || sshd -V; } 2>&1 | grep -oE 'OpenSSH_[0-9.]+(p[0-9]+
 
 precheck() {
   command_exists sshd || die "没有找到 sshd，请先安装 openssh-server"
+  check_drop_owner
   # Debian/Ubuntu 的 sshd 在服务未运行时（例如从 VNC 控制台操作）缺这个目录会导致 sshd -t 报错
   [[ -d /run/sshd || ! -f /etc/debian_version ]] || install -d -m 755 /run/sshd
   grep -Eiq '^[[:space:]]*Include[[:space:]].*sshd_config\.d' /etc/ssh/sshd_config ||
@@ -103,11 +105,18 @@ reload_sshd() {
 }
 
 # ---------- 备份与恢复 ----------
+check_drop_owner() {
+  if [[ -e $DROP || -L $DROP ]]; then
+    if [[ -L $DROP || ! -f $DROP ]] || ! grep -Fq "$SIGNATURE" "$DROP"; then
+      die "$DROP 不属于本工具；已停止，请检查该文件"
+    fi
+  fi
+}
+
 save_original() {
   install -d -m 700 "$STATE"
   [[ -f $STATE/managed ]] && return 0
   if [[ -e $DROP ]]; then
-    grep -q "$SIGNATURE" "$DROP" || die "$DROP 已存在且不是本工具生成的；为避免覆盖你的配置，已停止"
     install -m 600 "$DROP" "$BACKUP"
     stat -c '%a' "$DROP" >"$STATE/original-mode"
     echo yes >"$MARKER"
@@ -118,27 +127,33 @@ save_original() {
 }
 
 restore_original() {
-  if [[ $(cat "$MARKER" 2>/dev/null) == yes ]]; then
+  local original mode=600 tmp
+  original=$(cat "$MARKER") || return 1
+  if [[ $original == yes ]]; then
     [[ -f $BACKUP ]] || { log_error "找不到原配置备份：$BACKUP"; return 1; }
-    local mode=600
     [[ -f $STATE/original-mode ]] && read -r mode <"$STATE/original-mode"
-    install -m "$mode" "$BACKUP" "$DROP.tmp" && mv -f "$DROP.tmp" "$DROP"
-  else
+    tmp=$(mktemp "${DROP%/*}/.vps-init.XXXXXX") || return 1
+    if ! { install -m "$mode" "$BACKUP" "$tmp" && mv -f -- "$tmp" "$DROP"; }; then rm -f "$tmp"; return 1; fi
+  elif [[ $original == no ]]; then
     rm -f "$DROP"
+  else
+    log_error "原配置记录不完整：$MARKER"; return 1
   fi
 }
 
 # 回滚只撤销本次运行的改动：配置文件恢复成运行前的样子；状态目录是本次创建的才删除
-rollback() {
-  if [[ -n $PREV_MODE ]]; then
-    if ! { printf '%s\n' "$PREV_DROP" >"$DROP.tmp" && chmod "$PREV_MODE" "$DROP.tmp" && mv -f "$DROP.tmp" "$DROP"; }; then
-      log_warn "自动恢复失败；请保持当前连接，必要时用服务商的 VNC 控制台修复"
-    fi
+restore_before_run() {
+  if [[ -f $before/drop ]]; then
+    mv -f -- "$before/drop" "$DROP" || return 1
   else
-    rm -f "$DROP"
+    rm -f -- "$DROP" || return 1
   fi
+  reload_sshd || return 1
   ((HAD_STATE)) || rm -rf "$STATE"
-  if sshd -t 2>/dev/null; then reload_sshd >/dev/null 2>&1 || true; fi
+}
+
+rollback() {
+  restore_before_run || die "$1；自动恢复未完成，请保持当前连接并检查 sshd 和 $STATE"
   die "$1；SSH 配置已恢复到本次运行之前，登录方式没有改变"
 }
 
@@ -153,6 +168,7 @@ warn_password_users() {
 
 undo() {
   if [[ -f $STATE/managed ]]; then
+    check_drop_owner
     restore_original || die "恢复原 SSH 配置失败"
   elif [[ -f $DROP ]] && grep -q "$SIGNATURE" "$DROP"; then
     rm -f "$DROP" # 早期版本只写这一个文件，没有状态目录
@@ -166,11 +182,49 @@ undo() {
 }
 
 # ---------- 应用 ----------
+root_effective_config() {
+  local peer addr port context effective hostname
+  read -r peer _ addr port <<<"${SSH_CONNECTION:-}"
+  peer=${peer:-127.0.0.1}
+  context="user=root,addr=$peer"
+  if [[ -n $addr && -n $port ]]; then context+=",laddr=$addr,lport=$port"; fi
+  effective=$(sshd -T -C "$context,host=$peer") || return 1
+  # UseDNS 开启时，Match Host 使用正向地址也匹配的客户端反查名。
+  if [[ -n $addr ]] && grep -qx 'usedns yes' <<<"$effective"; then
+    command_exists getent || { log_error "UseDNS 已开启，缺少 getent，无法校验客户端主机名"; return 1; }
+    hostname=$(getent hosts "$peer" | awk 'NR == 1 {print tolower($2)}') || hostname=''
+    if [[ -n $hostname ]] && getent ahosts "$hostname" | awk -v ip="$peer" '$1 == ip {ok=1} END {exit !ok}'; then
+      sshd -T -C "$context,host=$hostname"
+      return
+    fi
+  fi
+  printf '%s\n' "$effective"
+}
+
+# AuthorizedKeysFile 可能列出多个路径；相对路径以 root 家目录为基准。
+uses_auth_file() {
+  local file
+  local -a files
+  read -ra files <<<"$(awk '$1 == "authorizedkeysfile" {$1=""; print}' <<<"$1")"
+  for file in ${files[@]+"${files[@]}"}; do
+    [[ $file != none ]] || continue
+    file=${file//%%/$'\001'}
+    file=${file//%h/$ROOT_HOME}
+    file=${file//%u/root}
+    file=${file//%U/0}
+    file=${file//$'\001'/%}
+    [[ $file == /* ]] || file=$ROOT_HOME/$file
+    [[ $file -ef $AUTH ]] && return 0
+  done
+  return 1
+}
+
 apply() {
-  local key fp have tmp effective setting addr=${SSH_CONNECTION:-127.0.0.1}
+  local key fp have tmp effective setting
 
   # 1. 安装公钥：按指纹去重，备注不同也不会重复添加
-  install -d -m 700 /root/.ssh
+  if ((${#KEYS[@]} == 0)) && [[ -z $(list_auth) ]]; then die "root 没有任何有效公钥，不能关闭密码登录"; fi
+  install -d -m 700 "$ROOT_HOME/.ssh"
   touch "$AUTH" && chmod 600 "$AUTH"
   [[ -s $AUTH && -n $(tail -c 1 "$AUTH") ]] && printf '\n' >>"$AUTH" # 补上文件末尾缺的换行
   have=$(list_auth | awk '{print $2}')
@@ -182,16 +236,18 @@ apply() {
       have+=$'\n'$fp
     done
   fi
-  if command_exists restorecon; then restorecon -R /root/.ssh || true; fi
+  if command_exists restorecon; then restorecon -R "$ROOT_HOME/.ssh" || true; fi
   [[ -n $(list_auth) ]] || die "root 没有任何有效公钥，不能关闭密码登录"
 
   # 2. 写入配置：先记下运行前的状态（用于回滚），再写临时文件、原子替换
-  PREV_DROP='' PREV_MODE='' HAD_STATE=0
-  if [[ -f $DROP ]]; then PREV_DROP=$(cat "$DROP") PREV_MODE=$(stat -c '%a' "$DROP"); fi
+  install -d -m 755 /etc/ssh/sshd_config.d
+  before=$(mktemp -d /etc/ssh/sshd_config.d/.vps-init.XXXXXX)
+  trap 'rm -rf -- "$before"' EXIT
+  HAD_STATE=0
+  if [[ -f $DROP ]]; then cp -p -- "$DROP" "$before/drop"; fi
   if [[ -f $STATE/managed ]]; then HAD_STATE=1; fi
   save_original
-  install -d -m 755 /etc/ssh/sshd_config.d
-  tmp=$(mktemp /etc/ssh/sshd_config.d/.vps-init.XXXXXX)
+  tmp=$before/new
   cat >"$tmp" <<EOF
 # $SIGNATURE（vps-init）；撤销：$(cmd_hint ssh --undo)
 PubkeyAuthentication yes
@@ -205,7 +261,7 @@ EOF
 
   # 3. 校验语法，再按「root + 当前来源地址」计算最终生效值（会套用 Match 规则），全部通过才重载
   sshd -t || rollback "sshd 语法检查未通过"
-  effective=$(sshd -T -C "user=root,host=${HOSTNAME:-localhost},addr=${addr%% *}" 2>&1) ||
+  effective=$(root_effective_config 2>&1) ||
     rollback "无法读取 sshd 最终生效配置"
   for setting in "pubkeyauthentication yes" "passwordauthentication no" "kbdinteractiveauthentication no"; do
     grep -qx "$setting" <<<"$effective" || rollback "最终生效值不是「$setting」（可能被 Match 规则或更早的配置覆盖）"
@@ -217,6 +273,9 @@ EOF
   fi
   grep -Eqx 'permitrootlogin (prohibit-password|without-password)' <<<"$effective" ||
     rollback "root 仅密钥登录的策略没有生效"
+  uses_auth_file "$effective" || rollback "AuthorizedKeysFile 没有读取 $AUTH"
+  awk '$1 == "authenticationmethods" {for (i=2; i<=NF; i++) if ($i == "any" || $i == "publickey") ok=1} END {exit !ok}' <<<"$effective" ||
+    rollback "AuthenticationMethods 不允许单凭一把公钥登录"
   reload_sshd || rollback "重载 sshd 失败"
 }
 
@@ -224,7 +283,7 @@ EOF
 # 读取 sshd 当前设置：PW（密码登录是否关闭）、ROOT（root 登录策略）、NKEYS（root 公钥数）
 read_facts() {
   local eff
-  eff=$(sshd -T 2>/dev/null) || return 1
+  eff=$(root_effective_config 2>/dev/null) || return 1
   PW=closed
   grep -qx 'passwordauthentication no' <<<"$eff" && grep -qx 'kbdinteractiveauthentication no' <<<"$eff" || PW=open
   case $(awk '$1 == "permitrootlogin" {print $2}' <<<"$eff") in
@@ -315,8 +374,8 @@ wizard() {
   if confirm "新窗口登录成功了吗？（回答 n 会立即撤销）"; then
     log_ok "完成。如需撤销：$(cmd_hint ssh --undo)"
   else
-    undo
-    log_warn "已恢复密码登录。请确认这里添加的公钥与客户端使用的私钥是同一对，然后再试"
+    restore_before_run || die "自动恢复未完成，请保持当前连接并检查 sshd 和 $STATE"
+    log_warn "已恢复本次运行前的 SSH 配置。请确认公钥与客户端使用的私钥是同一对，然后再试"
   fi
 }
 
@@ -328,11 +387,7 @@ main() {
   esac
   require_root
   (($# <= 1)) || die "参数过多：公钥请整体加引号"
-  if command_exists flock; then
-    install -d -m 755 "${LOCK%/*}"
-    exec 9>"$LOCK"
-    flock -n 9 || die "另一个 SSH 配置任务正在运行"
-  fi
+  lock_module ssh
   case ${1-} in
     '')
       has_tty || die "需要交互终端；自动化请直接传入公钥，例如：ssh.sh 'ssh-ed25519 AAAA…'"
@@ -342,8 +397,10 @@ main() {
     *)
       local src
       precheck
-      src=$(fetch "$1") || die "获取公钥失败：$1"
-      add_keys "$src" || exit 1
+      if [[ $1 != --use-existing ]]; then
+        src=$(fetch "$1") || die "获取公钥失败"
+        add_keys "$src" || exit 1
+      fi
       warn_password_users
       apply
       log_ok "已启用密钥登录，密码登录已关闭"

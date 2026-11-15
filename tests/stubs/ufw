@@ -5,6 +5,7 @@ dir=${UFW_STUB_DIR:?}
 mkdir -p "$dir"
 touch "$dir/rules"
 [[ ${1-} == --force ]] && shift
+if [[ $* == "${UFW_STUB_FAIL:-}" ]]; then echo "模拟 UFW 命令失败：$*" >&2; exit 1; fi
 case "$*" in
   status | "status verbose")
     if [[ -f $dir/active ]]; then
